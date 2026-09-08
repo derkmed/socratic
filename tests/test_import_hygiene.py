@@ -45,7 +45,7 @@ def _imported_roots() -> dict[pathlib.Path, set[str]]:
     per_file: dict[pathlib.Path, set[str]] = {}
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
         roots: set[str] = set()
-        for node in ast.walk(ast.parse(path.read_text())):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Import):
                 roots.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -90,13 +90,23 @@ def test_no_module_imports_open_webui():
     assert offenders == [], f"the host leaked below the portability seam: {offenders}"
 
 
+def _load_pyproject() -> dict:
+    """The parsed contents of `pyproject.toml`.
+
+    Read as bytes: TOML is defined to be UTF-8, and `tomllib.load` decodes it
+    as such, so a binary handle keeps the machine's locale codec out of it.
+    """
+    with PYPROJECT.open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def test_the_package_has_no_base_dependencies():
-    config = tomllib.loads(PYPROJECT.read_text())
+    config = _load_pyproject()
     assert config["project"]["dependencies"] == []
 
 
 def test_anthropic_is_declared_as_an_optional_extra():
-    config = tomllib.loads(PYPROJECT.read_text())
+    config = _load_pyproject()
     extras = config["project"]["optional-dependencies"]
     assert any(spec.startswith("anthropic") for spec in extras["anthropic"])
 
