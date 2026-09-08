@@ -49,3 +49,12 @@ class ProbeFailureBehavior(str, Enum):
     """Novice: correct the misconception but leave the blank resolved —
     re-opening a two-option bank whose answer the learner was just told is
     degenerate."""
+
+
+class ProbeCadence(str, Enum):
+    """A `UserValves` setting: how often the self-explanation probe fires."""
+
+    OFF = "off"
+    FINAL_BLANK_ONLY = "final_blank_only"
+    SOMETIMES = "sometimes"
+    ALWAYS = "always"
