@@ -123,8 +123,9 @@ class TestBlankRange:
 class TestTheConditionalValidator:
     """ADR-0004: `strict: true` holds structurally but cannot enforce the
     conditional invariants, so the domain validates them explicitly. This
-    ticket declares `validate_blank` and populates it per mode; the
-    `validate_quiz` entry point and the bounds live in the validator ticket."""
+    module declares `validate_blank` and populates it per mode; the
+    `validate_quiz` entry point and the bounds it enforces are exercised in
+    `tests/test_validation.py`."""
 
     def test_a_well_formed_novice_blank_passes(self):
         policy = default_registry().policy_for(DifficultyMode.NOVICE)

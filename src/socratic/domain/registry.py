@@ -10,8 +10,8 @@ this module is a bug, and `tests/test_registry.py` scans the package for one.
 
 This module declares `validate_blank` as a policy field and populates it per
 mode. The `validate_quiz` entry point, and the bounds it enforces (the 20-blank
-storage cap, and `blank_range` rejecting first), live in the validator ticket
-that follows.
+storage cap, and `blank_range` rejecting first), live in `validation.py`, which
+reaches these rules through the registry rather than restating them.
 """
 
 from __future__ import annotations
