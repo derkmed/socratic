@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "socratic"
+version = "0.1.0"
+description = "Socratic learning app — quiz domain package"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# The Anthropic SDK is an optional extra, never a base dependency: the domain
+# must be testable with no SDK installed (ADR-0002 portability seam, spec §5 —
+# the adapter is the only module that may import it).
+anthropic = ["anthropic>=0.40"]
+dev = ["pytest>=8", "tomli>=2; python_version < '3.11'"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/socratic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
