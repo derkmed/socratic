@@ -84,6 +84,13 @@ and per-call token usage including `cache_read_input_tokens`.
 `verdict`, `attempt_ordinal` (which rung of the ladder this was), `hint_rung_shown`,
 `created_at`, and `graded_by` (`deterministic` or `model`).
 
+**`Probe`** (ordered, embedded, peer of `Guess`) — `blank_id`, `question`,
+`self_explanation` (nullable; the learner may dismiss), `verdict`, `reopened_blank`
+(bool), `asked_at`, `answered_at`, `message_id`. Kept separate from `Guess` because a
+probe mutates blank state: it is an event in the timeline, not a property of a past
+guess, and the curation job replaying "what actually happened" is the consumer that
+would be misled by nesting it.
+
 The version stamps are what make "without a migration" true: a curation job reading
 old records knows which schema and prompt produced them, so changes are additive
 rather than rewrites. `sealed_at` and `outcome` exist so abandoned quizzes are
@@ -179,6 +186,14 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
   -> [ADR-0008](../adr/0008-learner-profile-composition.md)
 - **`blank_range` is a `ModePolicy` field** (Novice 1-2, Advanced 4-6). The
   20-blank cap is a storage invariant that should never fire.
+- **The self-explanation probe.** Randomised ~50% per correct answer plus the final
+  blank always, cadence owned by the client. Graded substantively;
+  `probe_failure_behavior` is a `ModePolicy` field - Advanced re-opens the blank,
+  Novice corrects but leaves it resolved. Ladder resumes on re-open, capped at one
+  re-open per blank. Stored as its own ordered collection, a peer of `guesses`.
+  Sealing is gated on the final probe. Supersedes ADR-0003's "~1 call per Novice
+  quiz" (really ~3) and ADR-0005's "~60 guesses" bound (really <=80 guesses,
+  <=40 probes). -> [ADR-0009](../adr/0009-self-explanation-probe.md)
 
 ## Acceptance
 
@@ -215,3 +230,12 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
     ledger figures are unchanged and the watermark does not move.
 18. Ledger figures are reproducible - recomputing from all attempts equals the
     incrementally-advanced values.
+19. A failed probe in Advanced re-opens the blank and the ladder resumes at the next
+    rung, not at rung 1.
+20. A failed probe in Novice leaves the blank resolved.
+21. A blank re-opens at most once; a second failed probe reveals and moves on.
+22. An attempt does not seal until the final blank's probe resolves.
+23. Probe cadence is reproducible under a seeded RNG, and the final blank is always
+    probed regardless of the seed.
+24. A dismissed probe persists with a null `self_explanation` and does not block
+    sealing.

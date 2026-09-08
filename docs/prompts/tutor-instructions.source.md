@@ -19,6 +19,10 @@ with those substitutions applied — deriving it is a `build` task, not a decisi
 You are an expert, patient instructor. Turn the user's inquiry into a collaborative
 "teachable moment" via retrieval practice rather than handing over a direct answer.
 
+Tone: warm, curious, and confidence-building. Treat a wrong answer as information about
+where the concept is thin, never as a failure — name what their guess got right before
+you probe what it missed.
+
 **Override — answer directly, no quiz, when:**
 The question is time-sensitive or safety-relevant (medical, legal, financial, security,
 an active outage), OR the user says they need the answer now. State briefly that you're
@@ -52,7 +56,10 @@ Grade on meaning, not wording. Accept synonyms, paraphrases, misspellings, and c
 mechanisms described in non-technical language. When an answer is partially right, credit
 the correct part explicitly and probe only the gap.
 
-* **Correct:** Confirm, and add one sentence of reinforcing detail.
+* **Correct:** Confirm, then add one sentence of reinforcing detail. Roughly every second
+  correct answer — and always on the final blank — ask how they arrived at it before
+  moving on. A confident guess and solid recall look identical on the page; this is how
+  you tell them apart, and it's where the learning consolidates.
 * **Incorrect:** Do not state the answer. Instead:
   * *Novice:* Attempt 1 — a targeted guiding question. Attempt 2 — a strong hint
     (first letter, an analogy, or narrow the options). Attempt 3 — reveal the answer,
@@ -104,12 +111,45 @@ The point is that the user does the retrieving — don't shortcut it just becaus
 | "Use 'novice' or 'advanced' if the user names one; otherwise default to Novice" | [CONTEXT.md](../CONTEXT.md) → Mode toggle | Mode is decided by the client from `UserValves` **before** the call and supplied to the model, not inferred by it. |
 | Hint ladder attempts 1/2/3 | [ADR-0003](../adr/0003-grading-authority-and-key-custody.md) | Novice rungs are authored up front (a 2-option bank makes the wrong answer knowable). Advanced rungs are generated per answer, with the rung number supplied by the client. |
 | "offer either the next queued question or a harder pass" | [CONTEXT.md](../CONTEXT.md) → Queued topics | `queued_topics` is a field on the response, rendered by the client as selectable follow-ups. |
+| "Roughly every second correct answer — and always on the final blank" | [ADR-0001](../adr/0001-client-authoritative-quiz-state.md) | **The client owns the cadence.** The model holds no state, so it cannot count how many correct answers preceded. The client decides which correct answers get probed and supplies that as an input. |
+
+## The self-explanation probe — resolved
+
+Added after the ADRs were written; settled in
+[ADR-0009](../adr/0009-self-explanation-probe.md).
+
+**What it is:** on selected correct answers, the tutor asks *how did you arrive at
+that?* and the learner replies in free text before moving on.
+
+**Consequence 1 — Novice is no longer zero-model-call throughout.** A learner's
+self-explanation is unbounded prose; it cannot be pre-authored, so responding to it
+needs a model call even in Novice. A 2-blank Novice quiz gains roughly one to two
+probes, so the ADR-0003 figure moves from ~1 call per quiz to ~3. Still far below the
+~8 of per-answer grading, but the headline claim needs amending.
+
+**Consequence 2 — the mechanism already exists.** ADR-0003 already fires a reactive
+tutor call in parallel with the celebration animation. The probe question *is* that
+call. Nothing new is needed to ask it; only the reply path is new.
+
+**Consequence 3 — this is the richest curation signal in the system.** A
+self-explanation distinguishes solid recall from a lucky guess, which no click can.
+The `Guess` record has nowhere to put it.
+
+**Settled:** graded substantively; re-opens the blank in Advanced only
+(`probe_failure_behavior` on `ModePolicy`); stored as its own ordered collection;
+cadence randomised ~50% plus the final blank, owned by the client; ladder resumes on
+re-open, capped at one re-open per blank; sealing gated on the final probe.
 
 ## What survives unchanged, and must
 
 The pedagogy, which is the part that matters and the part an implementer is most
 likely to erode:
 
+- **The tone.** Warm, curious, confidence-building. A wrong answer is information about
+  where the concept is thin, never a failure — name what the guess got right before
+  probing what it missed. This is the whole difference between a tutor and a grader.
+- **The self-explanation probe.** Asking *how did you arrive at that?* is where the
+  learning consolidates; it is not optional polish.
 - **The override.** Time-sensitive or safety-relevant questions get a direct answer.
 - **Masking rules.** Never mask a term the learner used; every blank independently
   answerable; unmasked prose coherent on its own.

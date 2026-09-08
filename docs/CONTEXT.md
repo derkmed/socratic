@@ -38,7 +38,19 @@ authoring call.
 inside the backend process. Never serialized into the iframe.
 
 **Hint ladder / rung** — the three escalating responses to a wrong answer. The
-client counts attempts and selects the rung; the model authors the text.
+client counts attempts and selects the rung; the model authors the text. On a
+re-opened blank the ladder **resumes where it left off** — a failed probe is
+evidence the learner needed more help, not less.
+
+**Probe** — the tutor asking *how did you arrive at that?* after a correct answer,
+and the learner's free-text reply. Fires on a coin flip per correct answer plus the
+final blank unconditionally; **the client owns the cadence**, since the model holds
+no state. The question rides the parallel tutor call that already fires during the
+celebration. A probe **mutates blank state**, so it is an event and a peer of
+`Guess`, not an annotation on one.
+
+**Self-explanation** — the learner's reply to a probe. The richest curation signal
+in the system: a click shows someone was right, this shows whether they knew.
 
 **Queued topics** — additional distinct questions the learner raised, listed rather
 than answered, per the single-topic-focus rule. Persisted on the attempt. When a
@@ -51,8 +63,13 @@ queue carries forward to the new attempt and the displaced one is marked
 **DifficultyMode** — an enum. `NOVICE` and `ADVANCED` today; more are expected.
 
 **ModePolicy** — everything that varies by mode, bundled: authoring schema
-fragment, grading strategy, validator rules, render hint, and `blank_range`
-(Novice 1–2, Advanced 4–6).
+fragment, grading strategy, validator rules, render hint, `blank_range`
+(Novice 1–2, Advanced 4–6), and `probe_failure_behavior`.
+
+**`probe_failure_behavior`** — what a failed probe does. **Advanced** re-opens the
+blank; **Novice** corrects the misconception but leaves it resolved, because
+re-opening a two-option bank whose answer the learner was just told is degenerate.
+Capped at one re-open per blank; a second failed probe reveals and moves on.
 
 **ModeRegistry** — maps mode to policy. **The only place mode is branched on.** An
 `if mode ==` anywhere else is a bug.
@@ -66,8 +83,10 @@ discarding retrieval work already done.
 ## Records
 
 **QuizAttempt** — one document per quiz session. Holds the raw unfilled quiz as
-authored plus every `Guess` in order. Capped at 20 blanks (~60 guesses); raising
-that cap is the trigger to migrate to a guess event stream.
+authored plus two ordered collections, `guesses` and `probes`, merged by timestamp
+when a timeline is needed. Bound: ≤20 blanks, ≤4 guesses and ≤2 probes per blank —
+so ≤80 guesses and ≤40 probes. Raising the blank cap is the trigger to migrate to a
+single event stream.
 
 **Guess** — one submission: blank, value, verdict, ladder rung, timestamp, and
 whether it was graded deterministically or by the model.
@@ -81,7 +100,10 @@ a closed tab tells us nothing, so readers apply their own age threshold.
 about quiz quality, outside the LLM conversation entirely. Separate record, so the
 attempt stays sealed.
 
-**Sealed** — an attempt that reached `resolved` and will never be written again.
+**Sealed** — an attempt that will never be written again. **Gated on the final
+probe resolving**, not on the last blank resolving: because a failed probe can
+re-open a blank in Advanced, `resolved` is not a terminal state and completion can
+fire and un-fire.
 
 ## The prompt
 

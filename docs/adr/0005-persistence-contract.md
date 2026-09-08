@@ -2,6 +2,7 @@
 
 Status: accepted
 Date: 2026-09-08
+Amended by: [ADR-0009](0009-self-explanation-probe.md)
 
 ## Decision
 
