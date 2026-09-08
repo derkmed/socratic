@@ -4,6 +4,8 @@ Status: accepted
 Date: 2026-09-08
 Supersedes: the "reprint the explanation every reply" instruction in the
 originally-supplied Socratic system prompt.
+Amended by: [ADR-0014](0014-model-choice-and-effort.md) (there are five frozen
+prefixes, one per call type, and each must clear the floor independently)
 
 ## Context
 
@@ -44,7 +46,8 @@ construction something we have already durably written down.
 
 Good:
 - The frozen prefix clears the 512-token minimum cacheable prefix on
-  `claude-opus-5` and reads at ~0.1× input price. 5-minute TTL breaks even at two
+  `claude-opus-5` (ADR-0014) and reads at ~0.1× input price. Note there is one
+  such prefix **per call type**, not one overall, and the floor binds on each. 5-minute TTL breaks even at two
   requests; a quiz makes many, and each read refreshes the timer for free — so a
   learner answering within five minutes keeps the session warm at negligible cost.
 - Rendering never waits on the model to re-describe state it already sent.

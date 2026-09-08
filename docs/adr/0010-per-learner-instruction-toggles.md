@@ -4,6 +4,10 @@ Date: 2026-09-08
 Status: accepted
 Extends: [ADR-0006](0006-learner-profile-lifecycle.md),
 [ADR-0009](0009-self-explanation-probe.md)
+Amended by: [ADR-0011](0011-latency-budget.md) and
+[ADR-0013](0013-reactive-tutor-line.md) (the call counts below predate asking a
+probe becoming free), [ADR-0014](0014-model-choice-and-effort.md) ("one segment-1
+cache entry" is one **per call type**, and there are five)
 
 ## Context
 
@@ -64,8 +68,11 @@ It covers probes-on, probes-off and dismissed probes without a branch — ADR-00
 
 ## Consequences
 
-One segment-1 cache entry for the whole workspace, permanently, however many
-toggles the product grows. Future settings inherit the rule for free, and the
+One segment-1 cache entry per call type for the whole workspace, permanently,
+however many toggles the product grows. (Written here as "one entry" — there are
+five, one per `ModelClient` method; see
+[ADR-0014](0014-model-choice-and-effort.md). The invariant is unchanged, but it is
+asserted per call type.) Future settings inherit the rule for free, and the
 question "does this change the prompt?" has a standing answer: no.
 
 The cost is roughly 80 inert tokens in the prompt of a learner who has probes off.
@@ -77,4 +84,6 @@ off, so the Advanced re-open path goes dormant. Probe density now varies across
 learners, so the curation job must normalise for it rather than comparing raw
 counts. And ADR-0009's "~3 model calls per Novice quiz" assumed `sometimes` — at
 `always` a 2-blank Novice quiz reaches ~4, and an Advanced quiz at `always` runs
-roughly 10-12.
+roughly 10-12. **These figures are stale:** they predate ADR-0011 making the probe
+*ask* free and ADR-0013 withdrawing the parallel tutor call. Recount before quoting
+them.

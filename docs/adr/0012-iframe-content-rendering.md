@@ -4,6 +4,8 @@ Date: 2026-09-08
 Status: accepted
 Resolves: the open CSP question carried since
 [ADR-0002](0002-open-webui-host-with-portability-seam.md)
+Amended by: [ADR-0015](0015-iframe-pipe-transport.md) (hardened deployments leave
+the prototype; `fetch` is the only answer path)
 
 ## Context
 
@@ -31,8 +33,13 @@ hardened deployment is not an edge case; it is what Open WebUI's own docs recomm
 natively: no client JS, no font files, no CDN request. It is the only option that
 works under every CSP, including `default-src 'self'`.
 
-**Blanks may sit inside formulas**, not only mask whole ones — the interesting gap
-in an equation is often a single term. When such a blank is filled, the Pipe returns
+**Blanks mask whole formulas only.** (Originally: blanks may sit inside formulas.
+**Deferred past the prototype.** Nesting is more tractable than it looks — MathML
+Core §2.2.1's own example is a fill-in-the-blank inside a radical, `mtext` is an
+HTML text integration point, and a submit `button` there needs no client JS — but
+there is *no* ARIA pattern for an unanswered blank, MathML-AAM maps almost nothing
+below `math`, and no production system does it. The accessibility story, not the
+layout, is what defers it.) When such a blank is filled, the Pipe returns
 the re-rendered formula **in the grading response it was already sending**. Every
 fill already round-trips to the Pipe, because ADR-0003 keeps the answer key
 server-side, so this adds no request and no perceptible latency.
@@ -48,6 +55,12 @@ prompt-injected explanation is a plausible route to HTML in the page.
 **`__event_call__` is the hardened-deployment path, not a hypothetical fallback.**
 Under the recommended `IFRAME_CSP`, `connect-src 'none'` blocks the iframe's `fetch`,
 so the client must degrade to it. Both paths must work.
+
+**Reversed by [ADR-0015](0015-iframe-pipe-transport.md).** The iframe cannot invoke
+`__event_call__` at all — it is a server-side Socket.IO call rendering a
+parent-page modal. It is a different architecture, not a degraded path. The
+prototype targets a default install, where `IFRAME_CSP` is unset and `fetch`
+works.
 
 ## Consequences
 
