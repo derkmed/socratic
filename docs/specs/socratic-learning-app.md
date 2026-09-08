@@ -77,8 +77,10 @@ complete from day one:
 
 **`QuizAttempt`** — `attempt_id` (ULID), `learner_id`, `session_id`, the raw
 unfilled quiz exactly as authored, `mode`, `topic`, `created_at`, `sealed_at`,
-`outcome` (resolved / abandoned), `model_id`, `schema_version`, `prompt_version`,
-and per-call token usage including `cache_read_input_tokens`.
+`outcome` (in_flight / resolved / abandoned), `probe_cadence_at_authoring`,
+`queued_topics`, `model_id`, `schema_version`, `prompt_version`, the Anthropic
+`message_id`s for every call, and per-call token usage including
+`cache_read_input_tokens`.
 
 **`Guess`** (ordered, embedded) — `blank_id`, `submitted` (option id or free text),
 `verdict`, `attempt_ordinal` (which rung of the ladder this was), `hint_rung_shown`,
