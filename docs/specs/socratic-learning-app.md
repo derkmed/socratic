@@ -22,7 +22,7 @@ be tested without it.
 
 | Seam | Kind | Why it must exist |
 |---|---|---|
-| `ModelClient` | port | The only non-deterministic dependency. Nothing in the system is testable without a stub here. Two methods: `author(request)` and `grade(request)`. |
+| `ModelClient` | port | The only non-deterministic dependency. Nothing in the system is testable without a stub here. Three methods: `author_skeleton`, `author_pedagogy`, `grade`. |
 | `PromptAssembler.assemble(...) -> PromptSegments` | pure function | Returns the ordered segment list with breakpoint markers, **not** a wire request. This is the only place the two ADR-0006 invariants can be asserted without hitting the live API: segment 1 is byte-identical across two different learners, and no learner-specific text appears above breakpoint 1. |
 | `QuizAuthoring.author(inquiry, learner_id) -> AuthoringResult` | service | Single entry to the most complex path. `AuthoringResult` is the `direct_answer \| quiz` union, so the ADR-0004 override branch is testable as a return value rather than a side effect. |
 | `QuizSession.submit(blank_id, response) -> Verdict` | service | The hot path, and the exact point where "Novice makes zero model calls" is assertable — a Novice test passes a `ModelClient` stub that fails the test if called at all. |
@@ -57,7 +57,10 @@ extension point, because behaviour differs per mode in four places. A
 - the grading strategy (`Deterministic` or `ModelGraded`),
 - the validator rules (`novice ⇒ len(options) ≥ 2 and correct_option_id ∈ options`;
   `advanced ⇒ rubric present`),
-- the render hint the iframe uses to choose an option bank or a text input.
+- the render hint the iframe uses to choose an option bank or a text input,
+- `blank_range` (Novice 1–2, Advanced 4–6),
+- `probe_failure_behavior` (Advanced re-opens the blank; Novice corrects but leaves
+  it resolved).
 
 **Adding a third mode is one registry entry.** No branching on mode outside the
 registry — this is the invariant that keeps D2a's promise of extensibility real.
@@ -115,13 +118,28 @@ abstraction that matters for D7, not the storage type.
 
 ### 5. ModelClient port and Anthropic adapter
 
-`claude-opus-5`, `output_config.format` with `strict: true`, `cache_control` on
-segments 1 and 2. The adapter is the only module importing the Anthropic SDK.
+Three methods: `author_skeleton`, `author_pedagogy`, `grade`. Model comes from an
+admin `Valve`, defaulting to `claude-sonnet-5`. `output_config.format` with
+`strict: true`, `cache_control` on segments 1 and 2. The adapter is the only module
+importing the Anthropic SDK.
+
+**First thing to verify:** `cache_read_input_tokens > 0` on Sonnet 5, whose minimum
+cacheable prefix is 1024 tokens against our borderline segment 1. A prefix under the
+floor fails to cache silently.
 
 ### 6. QuizAuthoring
 
-Assemble → call → parse → **run the conditional validator** → persist the unfilled
-quiz. Returns the `direct_answer | quiz` union.
+Two calls per ADR-0011. **Skeleton** — explanation, blanks, options — is the only
+blocking one; parse, validate, persist, render. **Pedagogy payload** — hints,
+reinforcements, probe questions, recap — is fired immediately after and lands while
+the learner reads. Returns the `direct_answer | quiz` union; a `direct_answer` skips
+the second call entirely.
+
+### 6a. Content rendering
+
+Restricted Markdown subset, sanitised. LaTeX converted to MathML server-side, per
+ADR-0012 — no client JS, no fonts, no CDN. Blanks may sit inside formulas; filling
+one returns the re-rendered formula in the grading response already being sent.
 
 ### 7. QuizSession
 
