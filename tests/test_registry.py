@@ -27,6 +27,46 @@ from socratic.domain.registry import (
 )
 from socratic.domain.types import Blank, Option
 
+SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
+
+EXEMPT_FROM_MODE_SCAN = ("domain/modes.py", "domain/registry.py")
+"""The two modules that ARE the extension point, named by their path relative to
+the package root rather than by filename.
+
+By name, a future `src/socratic/adapters/registry.py` — an adapter package is
+already planned in ADR-0002 — would be silently exempt, and the scan would keep
+passing while enforcing less than it claims.
+"""
+
+_MODE_BRANCH = re.compile(
+    r"(?:if|elif|assert|while|case)\b[^\n]*"
+    r"\b(?:DifficultyMode\.\w+|NOVICE|ADVANCED)\b"
+)
+
+
+def find_mode_branches(
+    source_root: pathlib.Path, exempt: "tuple[str, ...]"
+) -> "list[str]":
+    """Every line under `source_root` that branches on a difficulty mode.
+
+    Returns `path:lineno: source` strings, so a failure names the offender
+    rather than just its count. Extracted from the test that uses it so the
+    scan itself can be tested against a synthetic tree — an unenforced guard
+    and a passing one look identical from the outside.
+    """
+    exempted = set(exempt)
+    offenders = []
+    for path in sorted(source_root.rglob("*.py")):
+        location = path.relative_to(source_root).as_posix()
+        if location in exempted:
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            if _MODE_BRANCH.search(line):
+                offenders.append(f"{location}:{lineno}: {line.strip()}")
+    return offenders
+
+
 THE_SIX = {
     "authoring_schema_fragment",
     "grading_strategy",
@@ -227,22 +267,71 @@ class TestAddingAThirdMode:
         # The other half of acceptance 39: a registry entry only makes a third
         # mode cheap if nothing else has an opinion about mode. Anything that
         # compares against a DifficultyMode member, or matches on one, is a bug.
-        offenders = []
-        source_root = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
-        branch = re.compile(
-            r"(?:if|elif|assert|while|case)\b[^\n]*"
-            r"\b(?:DifficultyMode\.\w+|NOVICE|ADVANCED)\b"
-        )
-        for path in sorted(source_root.rglob("*.py")):
-            if path.name in {"registry.py", "modes.py"}:
-                continue
-            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-                if branch.search(line):
-                    location = path.relative_to(source_root)
-                    offenders.append(f"{location}:{lineno}: {line.strip()}")
+        offenders = find_mode_branches(SOURCE_ROOT, exempt=EXEMPT_FROM_MODE_SCAN)
         assert offenders == [], "branching on mode outside the registry:\n" + "\n".join(
             offenders
         )
+
+
+class TestTheModeBranchScanItself:
+    """The scan is the only thing enforcing "no `if mode ==` outside the
+    registry", so a hole in it enforces less than it claims while still
+    passing. These are the scan's own guard."""
+
+    def test_a_branch_outside_the_exempt_modules_is_reported(self, tmp_path):
+        _write(tmp_path / "domain" / "grading.py", "if mode == DifficultyMode.NOVICE:\n")
+        offenders = find_mode_branches(tmp_path, exempt=EXEMPT_FROM_MODE_SCAN)
+        assert [offender.split(":")[0] for offender in offenders] == [
+            "domain/grading.py"
+        ]
+
+    def test_the_exempt_modules_may_branch(self, tmp_path):
+        for module in EXEMPT_FROM_MODE_SCAN:
+            _write(tmp_path / module, "if mode == DifficultyMode.ADVANCED:\n")
+        assert find_mode_branches(tmp_path, exempt=EXEMPT_FROM_MODE_SCAN) == []
+
+    def test_the_exemption_is_by_path_not_by_filename(self, tmp_path):
+        # The bug this class was written for. An adapter package is already
+        # planned (ADR-0002), and a `src/socratic/adapters/registry.py` would
+        # be silently exempt if the scan matched a filename anywhere in the
+        # tree. The exemption names two specific modules, not two names.
+        _write(
+            tmp_path / "adapters" / "registry.py",
+            "if mode == DifficultyMode.NOVICE:\n",
+        )
+        _write(
+            tmp_path / "adapters" / "modes.py",
+            "if mode == DifficultyMode.NOVICE:\n",
+        )
+        offenders = find_mode_branches(tmp_path, exempt=EXEMPT_FROM_MODE_SCAN)
+        assert sorted(offender.split(":")[0] for offender in offenders) == [
+            "adapters/modes.py",
+            "adapters/registry.py",
+        ]
+
+    def test_a_line_that_merely_mentions_a_mode_is_not_a_branch(self, tmp_path):
+        _write(tmp_path / "domain" / "quiet.py", "mode = DifficultyMode.NOVICE\n")
+        assert find_mode_branches(tmp_path, exempt=EXEMPT_FROM_MODE_SCAN) == []
+
+    def test_the_report_names_the_file_the_line_and_the_source(self, tmp_path):
+        _write(
+            tmp_path / "domain" / "grading.py",
+            "x = 1\nif mode == DifficultyMode.NOVICE:\n",
+        )
+        assert find_mode_branches(tmp_path, exempt=EXEMPT_FROM_MODE_SCAN) == [
+            "domain/grading.py:2: if mode == DifficultyMode.NOVICE:"
+        ]
+
+    def test_every_exempt_module_actually_exists(self):
+        # An exemption naming a module that has moved would silently stop
+        # exempting anything, which is the same class of bug in reverse.
+        for module in EXEMPT_FROM_MODE_SCAN:
+            assert (SOURCE_ROOT / module).is_file(), f"{module} is no longer there"
+
+
+def _write(path: pathlib.Path, source: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
 
 
 def _stub_policy() -> ModePolicy:
