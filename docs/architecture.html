@@ -1,0 +1,445 @@
+<title>Socratic Quiz Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+  :root{
+    --ground:#F1F2ED; --surface:#FAFBF7; --surface-2:#E7EAE2;
+    --ink:#14231F; --muted:#57635C; --rule:#C6CDC2;
+    --accent:#14605A; --key:#A0660F; --rose:#93353E;
+    --shadow:0 1px 2px rgba(20,35,31,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#111614; --surface:#1A201D; --surface-2:#232A26;
+      --ink:#E4EAE3; --muted:#95A099; --rule:#333B36;
+      --accent:#63C0B1; --key:#DCA44C; --rose:#DD8B91;
+      --shadow:0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#111614; --surface:#1A201D; --surface-2:#232A26;
+    --ink:#E4EAE3; --muted:#95A099; --rule:#333B36;
+    --accent:#63C0B1; --key:#DCA44C; --rose:#DD8B91;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+
+  body{background:var(--ground);color:var(--ink);
+    font-family:"Source Sans 3",ui-sans-serif,system-ui,sans-serif;
+    font-size:16.5px;line-height:1.6;}
+  .wrap{max-width:74rem;margin:0 auto;padding:4rem 1.5rem 6rem;
+    display:flex;flex-direction:column;gap:3.25rem;}
+  .col{max-width:37rem;}
+
+  h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(2rem,4.5vw,2.9rem);
+    line-height:1.08;letter-spacing:-.015em;margin:0 0 .6rem;text-wrap:balance;}
+  h2{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:1.5rem;
+    line-height:1.2;margin:0 0 .35rem;text-wrap:balance;}
+  p{margin:0 0 .9rem;}
+  .lede{font-size:1.12rem;color:var(--muted);max-width:38rem;}
+  .eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem;}
+  .fignum{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 .3rem;}
+  code{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.86em;
+    background:var(--surface-2);padding:.08em .34em;border-radius:3px;}
+  strong{font-weight:600;}
+
+  section{display:flex;flex-direction:column;gap:1.1rem;}
+  figure{margin:0;display:flex;flex-direction:column;gap:.75rem;}
+  .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);
+    border-radius:5px;padding:1.25rem;box-shadow:var(--shadow);}
+  svg{display:block;max-width:100%;height:auto;min-width:660px;color:var(--ink);}
+  figcaption{font-size:.92rem;color:var(--muted);max-width:40rem;}
+
+  .bx{fill:var(--surface-2);stroke:var(--rule);stroke-width:1;}
+  .bx-plain{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:4 4;}
+  .bx-key{fill:none;stroke:var(--key);stroke-width:1.5;}
+  .bx-rose{fill:none;stroke:var(--rose);stroke-width:1;stroke-dasharray:4 4;}
+  .ln{stroke:var(--ink);stroke-width:1.4;fill:none;}
+  .ln-key{stroke:var(--key);stroke-width:1.6;fill:none;}
+  .ln-dash{stroke:var(--muted);stroke-width:1.3;fill:none;stroke-dasharray:5 4;}
+  .ln-rose{stroke:var(--rose);stroke-width:1.4;fill:none;}
+  .ln-rule{stroke:var(--rule);stroke-width:1;fill:none;}
+  .seam{stroke:var(--accent);stroke-width:1.6;fill:none;stroke-dasharray:7 5;}
+  .bp{stroke:var(--accent);stroke-width:2;fill:none;}
+  .head{fill:var(--ink);} .head-key{fill:var(--key);}
+  .head-mut{fill:var(--muted);} .head-rose{fill:var(--rose);}
+
+  svg text{font-family:"Source Sans 3",sans-serif;font-size:12.5px;fill:var(--ink);}
+  svg .t{font-weight:600;font-size:12.5px;}
+  svg .s{font-size:11px;fill:var(--muted);}
+  svg .m{font-family:"IBM Plex Mono",monospace;font-size:9.5px;
+    letter-spacing:.1em;text-transform:uppercase;fill:var(--muted);}
+  svg .arrowlbl{font-size:11px;fill:var(--muted);}
+  svg .keytxt{fill:var(--key);font-size:11px;}
+  svg .rosetxt{fill:var(--rose);font-size:11px;}
+  svg .accenttxt{fill:var(--accent);font-size:10px;font-family:"IBM Plex Mono",monospace;
+    letter-spacing:.1em;text-transform:uppercase;}
+
+  .note{border-left:2px solid var(--key);padding:.15rem 0 .15rem 1rem;color:var(--muted);
+    font-size:.95rem;max-width:38rem;}
+  hr{border:0;border-top:1px solid var(--rule);margin:0;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+</style>
+
+<div class="wrap">
+
+<header class="col">
+  <p class="eyebrow">System design &middot; eight decisions, six ADRs</p>
+  <h1>Socratic Quiz Architecture</h1>
+  <p class="lede">How a learner&rsquo;s question becomes a quiz, how an answer gets graded, and
+  where the money goes. Every arrow here is the consequence of a recorded decision.</p>
+</header>
+
+<hr>
+
+<section>
+  <div class="col">
+    <p class="fignum">Figure 1</p>
+    <h2>The portability seam</h2>
+    <p>Open WebUI donates authentication, accounts and packaging. It earns that keep only if it
+    stays replaceable, so the rule runs one way: the adapter knows about Open WebUI, and nothing
+    below the seam does. The answer key lives below the seam and is never serialized into the page.</p>
+  </div>
+  <figure>
+    <div class="scroll">
+      <svg width="900" height="600" viewBox="0 0 900 600" role="img" aria-label="Component diagram: a browser tab with a sandboxed quiz iframe talks to a Pipe adapter inside the Open WebUI backend process; below a portability seam sits a domain package with no Open WebUI imports, repository interfaces, and the store holding the answer key; the domain calls the Anthropic API.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head"></polygon>
+          </marker>
+          <marker id="a1k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-key"></polygon>
+          </marker>
+          <marker id="a1m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-mut"></polygon>
+          </marker>
+        </defs>
+
+        <text x="30" y="34" class="m">Browser tab</text>
+        <rect x="30" y="48" width="230" height="264" rx="4" class="bx-plain"></rect>
+        <rect x="50" y="74" width="190" height="46" rx="3" class="bx"></rect>
+        <text x="145" y="102" class="t" text-anchor="middle">Open WebUI frontend</text>
+        <rect x="50" y="146" width="190" height="118" rx="3" class="bx"></rect>
+        <text x="145" y="176" class="t" text-anchor="middle">Quiz iframe</text>
+        <text x="145" y="196" class="s" text-anchor="middle">sandboxed, opaque origin</text>
+        <text x="145" y="228" class="keytxt" text-anchor="middle">display fields only</text>
+        <text x="145" y="246" class="s" text-anchor="middle">option labels, never answers</text>
+
+        <text x="320" y="34" class="m">Open WebUI backend process</text>
+        <rect x="320" y="48" width="340" height="504" rx="4" class="bx-plain"></rect>
+
+        <rect x="340" y="146" width="300" height="66" rx="3" class="bx"></rect>
+        <text x="490" y="172" class="t" text-anchor="middle">Pipe / Action &mdash; adapter</text>
+        <text x="490" y="192" class="s" text-anchor="middle">__user__ &#8594; LearnerId &middot; HTMLResponse &middot; __event_call__</text>
+
+        <line x1="242" y1="170" x2="332" y2="170" class="ln" marker-end="url(#a1)"></line>
+        <text x="287" y="162" class="arrowlbl" text-anchor="middle">answer event</text>
+        <line x1="332" y1="204" x2="244" y2="204" class="ln-key" marker-end="url(#a1k)"></line>
+        <text x="287" y="222" class="arrowlbl" text-anchor="middle">rendered HTML</text>
+
+        <text x="490" y="238" class="accenttxt" text-anchor="middle">Portability seam</text>
+        <line x1="330" y1="250" x2="650" y2="250" class="seam"></line>
+        <line x1="440" y1="212" x2="440" y2="262" class="ln" marker-end="url(#a1)"></line>
+        <text x="450" y="234" class="arrowlbl">LearnerId</text>
+
+        <rect x="340" y="266" width="300" height="206" rx="3" class="bx-plain"></rect>
+        <text x="490" y="288" class="s" text-anchor="middle">Domain package &mdash; zero Open WebUI imports</text>
+
+        <rect x="356" y="298" width="132" height="48" rx="3" class="bx"></rect>
+        <text x="422" y="320" class="t" text-anchor="middle">Quiz schema</text>
+        <text x="422" y="337" class="s" text-anchor="middle">+ validator</text>
+
+        <rect x="496" y="298" width="132" height="48" rx="3" class="bx"></rect>
+        <text x="562" y="320" class="t" text-anchor="middle">Prompt assembly</text>
+        <text x="562" y="337" class="s" text-anchor="middle">cache breakpoints</text>
+
+        <rect x="356" y="358" width="132" height="48" rx="3" class="bx"></rect>
+        <text x="422" y="380" class="t" text-anchor="middle">Grading</text>
+        <text x="422" y="397" class="s" text-anchor="middle">two paths</text>
+
+        <rect x="496" y="358" width="132" height="48" rx="3" class="bx"></rect>
+        <text x="562" y="380" class="t" text-anchor="middle">ProfileBuilder</text>
+        <text x="562" y="397" class="s" text-anchor="middle">offline</text>
+
+        <rect x="356" y="416" width="272" height="42" rx="3" class="bx"></rect>
+        <text x="492" y="442" class="t" text-anchor="middle">Repository interfaces</text>
+
+        <line x1="492" y1="458" x2="492" y2="490" class="ln" marker-end="url(#a1)"></line>
+
+        <rect x="340" y="494" width="300" height="48" rx="3" class="bx-key"></rect>
+        <text x="490" y="514" class="t" text-anchor="middle">In-memory store</text>
+        <text x="490" y="532" class="keytxt" text-anchor="middle">holds the answer key &middot; swaps for a document store</text>
+
+        <rect x="700" y="298" width="170" height="76" rx="3" class="bx"></rect>
+        <text x="785" y="330" class="t" text-anchor="middle">Anthropic</text>
+        <text x="785" y="349" class="s" text-anchor="middle">claude-opus-5</text>
+
+        <line x1="634" y1="318" x2="694" y2="318" class="ln" marker-end="url(#a1)"></line>
+        <text x="664" y="310" class="arrowlbl" text-anchor="middle">request</text>
+        <line x1="694" y1="356" x2="636" y2="356" class="ln-dash" marker-end="url(#a1m)"></line>
+        <text x="664" y="374" class="arrowlbl" text-anchor="middle">structured output</text>
+      </svg>
+    </div>
+    <figcaption>The seam is a discipline, not a mechanism &mdash; only review stops an Open WebUI
+    import from drifting below the dashed line.</figcaption>
+  </figure>
+</section>
+
+<hr>
+
+<section>
+  <div class="col">
+    <p class="fignum">Figure 2</p>
+    <h2>Two grading paths, and the hop between them</h2>
+    <p>A Novice bank has exactly two options, so the wrong answer is knowable when the quiz is
+    written. Its reinforcement and all three hint rungs are authored up front, which takes the
+    model off the critical path entirely. Advanced mode is free recall, so it has to stay on it.</p>
+  </div>
+  <figure>
+    <div class="scroll">
+      <svg width="900" height="400" viewBox="0 0 900 400" role="img" aria-label="Comparison of two answer paths. The Novice path runs from a click through the Pipe adapter to a local key comparison and returns a verdict with no model call, with an optional tutor call fired in parallel off the critical path. The Advanced path routes through the Anthropic API before returning a verdict.">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head"></polygon>
+          </marker>
+          <marker id="a2k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-key"></polygon>
+          </marker>
+          <marker id="a2m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-mut"></polygon>
+          </marker>
+        </defs>
+
+        <text x="20" y="28" class="m">Novice &mdash; clicked answer</text>
+        <rect x="20" y="44" width="128" height="52" rx="3" class="bx"></rect>
+        <text x="84" y="68" class="t" text-anchor="middle">Click option</text>
+        <text x="84" y="85" class="s" text-anchor="middle">in the iframe</text>
+
+        <line x1="152" y1="70" x2="204" y2="70" class="ln" marker-end="url(#a2)"></line>
+
+        <rect x="208" y="44" width="128" height="52" rx="3" class="bx"></rect>
+        <text x="272" y="68" class="t" text-anchor="middle">Pipe adapter</text>
+        <text x="272" y="85" class="s" text-anchor="middle">1&ndash;5 ms local</text>
+
+        <line x1="340" y1="70" x2="392" y2="70" class="ln" marker-end="url(#a2)"></line>
+
+        <rect x="396" y="44" width="160" height="52" rx="3" class="bx"></rect>
+        <text x="476" y="68" class="t" text-anchor="middle">Compare to stored key</text>
+        <text x="476" y="85" class="s" text-anchor="middle">no model call</text>
+
+        <line x1="560" y1="70" x2="612" y2="70" class="ln" marker-end="url(#a2)"></line>
+
+        <rect x="616" y="44" width="180" height="52" rx="3" class="bx"></rect>
+        <text x="706" y="68" class="t" text-anchor="middle">Verdict + pre-authored</text>
+        <text x="706" y="85" class="s" text-anchor="middle">reinforcement or hint rung</text>
+
+        <path d="M 796 96 L 840 96 L 840 126 L 84 126 L 84 100" class="ln-dash" marker-end="url(#a2m)"></path>
+        <text x="462" y="144" class="arrowlbl" text-anchor="middle">celebration animation starts immediately &mdash; 300 ms+</text>
+
+        <path d="M 272 96 L 272 188 L 698 188" class="ln-key" marker-end="url(#a2k)"></path>
+        <text x="470" y="180" class="keytxt" text-anchor="middle">optional richer tutor line, fired in parallel &mdash; streams in behind the animation</text>
+
+        <rect x="702" y="166" width="170" height="44" rx="3" class="bx-key"></rect>
+        <text x="787" y="193" class="t" text-anchor="middle">Anthropic</text>
+
+        <line x1="20" y1="234" x2="880" y2="234" class="ln-rule"></line>
+
+        <text x="20" y="268" class="m">Advanced &mdash; typed answer</text>
+        <rect x="20" y="284" width="128" height="52" rx="3" class="bx"></rect>
+        <text x="84" y="308" class="t" text-anchor="middle">Type answer</text>
+        <text x="84" y="325" class="s" text-anchor="middle">free recall</text>
+
+        <line x1="152" y1="310" x2="204" y2="310" class="ln" marker-end="url(#a2)"></line>
+
+        <rect x="208" y="284" width="128" height="52" rx="3" class="bx"></rect>
+        <text x="272" y="308" class="t" text-anchor="middle">Pipe adapter</text>
+
+        <line x1="340" y1="310" x2="392" y2="310" class="ln" marker-end="url(#a2)"></line>
+
+        <rect x="396" y="284" width="160" height="52" rx="3" class="bx"></rect>
+        <text x="476" y="308" class="t" text-anchor="middle">Assemble block</text>
+        <text x="476" y="325" class="s" text-anchor="middle">cache-anchored</text>
+
+        <line x1="560" y1="310" x2="612" y2="310" class="ln-key" marker-end="url(#a2k)"></line>
+
+        <rect x="616" y="284" width="180" height="52" rx="3" class="bx-key"></rect>
+        <text x="706" y="308" class="t" text-anchor="middle">Anthropic</text>
+        <text x="706" y="325" class="keytxt" text-anchor="middle">on the critical path</text>
+
+        <path d="M 796 336 L 840 336 L 840 366 L 84 366 L 84 340" class="ln-dash" marker-end="url(#a2m)"></path>
+        <text x="462" y="384" class="arrowlbl" text-anchor="middle">graded on meaning, not wording &middot; one model call per answer</text>
+      </svg>
+    </div>
+    <figcaption>The ochre hop is the one that costs money and latency. Novice keeps it off to the
+    side; Advanced puts it in the middle. That is the whole difference between roughly one model
+    call per quiz and roughly eight.</figcaption>
+  </figure>
+</section>
+
+<hr>
+
+<section>
+  <div class="col">
+    <p class="fignum">Figure 3</p>
+    <h2>Prompt layout and the two breakpoints</h2>
+    <p>Anthropic caches are isolated per <em>workspace</em>, not per user. That makes segment order
+    the highest-leverage decision in the system: put learner-specific text above the first
+    breakpoint and a million learners each pay a cold write on identical instructions.</p>
+  </div>
+  <figure>
+    <div class="scroll">
+      <svg width="900" height="380" viewBox="0 0 900 380" role="img" aria-label="Prompt layout. Segment one holds invariant tutor instructions and caches once workspace-wide; segment two holds the learner profile, quiz and blank rubrics and caches per session; a volatile tail of guesses is never cached. Below, an anti-pattern shows the profile interpolated into segment one, giving every learner a unique prefix.">
+        <defs>
+          <marker id="a3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-rose"></polygon>
+          </marker>
+        </defs>
+
+        <text x="20" y="28" class="m">Render order &#8594; tools, system, messages</text>
+
+        <rect x="20" y="48" width="300" height="70" rx="3" class="bx"></rect>
+        <text x="170" y="78" class="t" text-anchor="middle">Invariant tutor instructions</text>
+        <text x="170" y="98" class="s" text-anchor="middle">identical for every learner</text>
+
+        <line x1="330" y1="42" x2="330" y2="124" class="bp"></line>
+        <text x="338" y="38" class="accenttxt">breakpoint 1</text>
+
+        <rect x="340" y="48" width="270" height="70" rx="3" class="bx"></rect>
+        <text x="475" y="72" class="t" text-anchor="middle">Learner profile</text>
+        <text x="475" y="90" class="t" text-anchor="middle">+ quiz + blank rubrics</text>
+        <text x="475" y="108" class="s" text-anchor="middle">per learner, per session</text>
+
+        <line x1="620" y1="42" x2="620" y2="124" class="bp"></line>
+        <text x="628" y="38" class="accenttxt">breakpoint 2</text>
+
+        <rect x="630" y="48" width="250" height="70" rx="3" class="bx-plain"></rect>
+        <text x="755" y="72" class="t" text-anchor="middle">Volatile tail</text>
+        <text x="755" y="90" class="s" text-anchor="middle">guesses so far, in order</text>
+        <text x="755" y="107" class="s" text-anchor="middle">current blank + guess</text>
+
+        <line x1="20" y1="138" x2="320" y2="138" class="ln"></line>
+        <text x="170" y="158" class="arrowlbl" text-anchor="middle">cached once, workspace-wide</text>
+        <text x="170" y="176" class="arrowlbl" text-anchor="middle">every learner reads it at ~0.1&#215;</text>
+
+        <line x1="340" y1="138" x2="610" y2="138" class="ln"></line>
+        <text x="475" y="158" class="arrowlbl" text-anchor="middle">cached per session</text>
+        <text x="475" y="176" class="arrowlbl" text-anchor="middle">reads refresh the timer for free</text>
+
+        <line x1="630" y1="138" x2="880" y2="138" class="ln-dash"></line>
+        <text x="755" y="158" class="arrowlbl" text-anchor="middle">never cached &mdash; tens of tokens</text>
+
+        <line x1="20" y1="214" x2="880" y2="214" class="ln-rule"></line>
+
+        <text x="20" y="248" class="m">The anti-pattern this avoids</text>
+
+        <rect x="20" y="266" width="380" height="64" rx="3" class="bx-rose"></rect>
+        <text x="210" y="294" class="t" text-anchor="middle">Instructions with the profile interpolated in</text>
+        <text x="210" y="314" class="rosetxt" text-anchor="middle">learner data f-strung into the system prompt</text>
+
+        <line x1="408" y1="298" x2="466" y2="298" class="ln-rose" marker-end="url(#a3r)"></line>
+
+        <rect x="472" y="266" width="408" height="64" rx="3" class="bx-rose"></rect>
+        <text x="676" y="294" class="t" text-anchor="middle">Every learner gets a unique prefix</text>
+        <text x="676" y="314" class="rosetxt" text-anchor="middle">nothing caches across users &middot; a million cold writes on identical text</text>
+      </svg>
+    </div>
+    <figcaption>One invariant carries this: no learner-specific text may ever appear above
+    breakpoint 1. Worth a test asserting segment one is byte-identical for two different learners.</figcaption>
+  </figure>
+</section>
+
+<hr>
+
+<section>
+  <div class="col">
+    <p class="fignum">Figure 4</p>
+    <h2>The learning loop, and what closes it</h2>
+    <p>The attempt record does triple duty: it is the tutor&rsquo;s memory during a quiz, the audit
+    trail afterwards, and the input the profile job reads. The rating never enters the
+    conversation &mdash; it is a human signal about the quiz, kept beside it.</p>
+  </div>
+  <figure>
+    <div class="scroll">
+      <svg width="900" height="340" viewBox="0 0 900 340" role="img" aria-label="Lifecycle. A learner inquiry produces either a direct answer or a quiz; the quiz is played until every blank resolves; the attempt is then sealed as immutable; an optional rating is stored separately; and an offline ProfileBuilder job folds recent attempts into the learner profile, which feeds segment two of the next authoring call.">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head"></polygon>
+          </marker>
+          <marker id="a4m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <polygon points="0,1 10,5 0,9" class="head-mut"></polygon>
+          </marker>
+        </defs>
+
+        <rect x="20" y="60" width="140" height="56" rx="3" class="bx"></rect>
+        <text x="90" y="84" class="t" text-anchor="middle">Learner inquiry</text>
+        <text x="90" y="101" class="s" text-anchor="middle">free text</text>
+
+        <line x1="164" y1="88" x2="212" y2="88" class="ln" marker-end="url(#a4)"></line>
+
+        <rect x="216" y="60" width="150" height="56" rx="3" class="bx"></rect>
+        <text x="291" y="84" class="t" text-anchor="middle">Authoring call</text>
+        <text x="291" y="101" class="s" text-anchor="middle">schema-constrained</text>
+
+        <path d="M 260 116 L 260 150 L 216 150" class="ln-dash" marker-end="url(#a4m)"></path>
+        <rect x="30" y="130" width="182" height="40" rx="3" class="bx-plain"></rect>
+        <text x="121" y="155" class="s" text-anchor="middle">direct_answer &mdash; override path</text>
+
+        <line x1="370" y1="88" x2="418" y2="88" class="ln" marker-end="url(#a4)"></line>
+
+        <rect x="422" y="60" width="160" height="56" rx="3" class="bx"></rect>
+        <text x="502" y="84" class="t" text-anchor="middle">Quiz played</text>
+        <text x="502" y="101" class="s" text-anchor="middle">blanks resolve, guesses logged</text>
+
+        <line x1="586" y1="88" x2="624" y2="88" class="ln" marker-end="url(#a4)"></line>
+
+        <rect x="628" y="60" width="170" height="56" rx="3" class="bx"></rect>
+        <text x="713" y="84" class="t" text-anchor="middle">Attempt sealed</text>
+        <text x="713" y="101" class="s" text-anchor="middle">immutable, never rewritten</text>
+
+        <path d="M 830 116 L 830 148" class="ln-dash" marker-end="url(#a4m)"></path>
+        <rect x="628" y="152" width="170" height="46" rx="3" class="bx-plain"></rect>
+        <text x="713" y="172" class="t" text-anchor="middle">Rating</text>
+        <text x="713" y="190" class="s" text-anchor="middle">optional, outside the conversation</text>
+        <path d="M 713 116 L 713 148" class="ln-dash" marker-end="url(#a4m)"></path>
+
+        <text x="20" y="248" class="m">Offline &mdash; batch, off the critical path</text>
+        <rect x="20" y="258" width="860" height="64" rx="4" class="bx-plain"></rect>
+
+        <rect x="628" y="272" width="170" height="36" rx="3" class="bx"></rect>
+        <text x="713" y="295" class="t" text-anchor="middle">ProfileBuilder</text>
+
+        <line x1="713" y1="202" x2="713" y2="268" class="ln" marker-end="url(#a4)"></line>
+        <text x="723" y="238" class="arrowlbl">reads recent attempts</text>
+
+        <line x1="624" y1="290" x2="386" y2="290" class="ln" marker-end="url(#a4)"></line>
+        <rect x="226" y="272" width="156" height="36" rx="3" class="bx"></rect>
+        <text x="304" y="295" class="t" text-anchor="middle">Learner profile</text>
+
+        <path d="M 304 272 L 304 226 L 400 226 L 400 120" class="ln" marker-end="url(#a4)"></path>
+        <text x="410" y="200" class="arrowlbl">into segment 2</text>
+      </svg>
+    </div>
+    <figcaption>The profile lags by one job interval, so a new learner&rsquo;s first quizzes are
+    un-personalised. That is the accepted cost of keeping generation off the learner&rsquo;s path.</figcaption>
+  </figure>
+</section>
+
+<hr>
+
+<section class="col">
+  <h2>What the diagrams assume</h2>
+  <p class="note">One arrow in Figure 1 is not yet verified: whether a rich-UI iframe may
+  <code>fetch</code> our API under Open WebUI&rsquo;s content security policy. If it cannot, the
+  answer event arrives via <code>__event_call__</code> instead &mdash; a clunkier modal, but the
+  same topology. Nothing else in these figures changes.</p>
+  <p style="margin-top:1.25rem">Decisions behind each figure: the seam is <strong>ADR-0002</strong>;
+  the two grading paths and the parallel tutor call are <strong>ADR-0003</strong>; the segment
+  layout is <strong>ADR-0001</strong> and <strong>ADR-0006</strong>; the sealed attempt and separate
+  rating are <strong>ADR-0005</strong>; the schema and its override branch are
+  <strong>ADR-0004</strong>.</p>
+</section>
+
+</div>
