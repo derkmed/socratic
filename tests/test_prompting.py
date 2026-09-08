@@ -30,6 +30,59 @@ from socratic.domain.prompting import (
 )
 from socratic.domain.types import Blank, BlankSegment, Option, Quiz, TextSegment
 
+PROMPTING_SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
+
+EXEMPT_FROM_PROFILE_SCAN = ("domain/prompting.py",)
+"""The module that owns the only reads, named by path relative to the package
+root rather than by filename — see #23 for the same fault in the mode scan."""
+
+PROFILE_INTERNALS = ("ledger", "narrative")
+"""The shape-bearing fields the abstraction exists to hide.
+
+`learner_id` is deliberately **not** one of them. CONTEXT calls it "partition
+key for everything", and `LearnerProfileRepository.get(learner_id)` already
+takes it as a parameter — a repository keying by it depends on the partition,
+not on the profile's shape. Including it here made the guard forbid persistence
+from storing a profile at all, which is what took `main` red.
+"""
+
+_PROFILE_INTERNAL_READ = re.compile(
+    r"\bprofile\.(?:" + "|".join(PROFILE_INTERNALS) + r")\b"
+)
+
+
+def find_profile_internal_reads(
+    source_root: pathlib.Path, exempt: tuple[str, ...]
+) -> list[str]:
+    """Every line under `source_root` reading a shape-bearing profile field.
+
+    Extracted from the test that uses it so the scan itself can be tested: an
+    unenforced guard and a working one look identical from the outside.
+    """
+    exempted = set(exempt)
+    offenders = []
+    for path in sorted(source_root.rglob("*.py")):
+        location = path.relative_to(source_root).as_posix()
+        if location in exempted:
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for lineno, line in enumerate(lines, start=1):
+            if _PROFILE_INTERNAL_READ.search(line):
+                offenders.append(f"{location}:{lineno}: {line.strip()}")
+    return offenders
+
+
+def _scan_snippet(location: str, source: str) -> list[str]:
+    """Run the scan over a synthetic tree holding one file."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        path = root / location
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+        return find_profile_internal_reads(root, exempt=EXEMPT_FROM_PROFILE_SCAN)
+
 # Two learners who share nothing: different ids, different ledgers, different
 # narratives, different cadences. Anything that leaks below is visible.
 ADA = LearnerProfile(
@@ -373,20 +426,49 @@ class TestRenderProfile:
         # CONTEXT: LearnerProfile — "rendered into segment 2 through a single
         # call; the domain never reads its internals, so its shape is free to
         # change". `prompting.py` owns the only reads.
-        source_root = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
-        field_read = re.compile(r"\bprofile\.(ledger|narrative|learner_id)\b")
-        offenders = []
-        for path in sorted(source_root.rglob("*.py")):
-            if path.name == "prompting.py":
-                continue
-            for lineno, line in enumerate(
-                    path.read_text(encoding="utf-8").splitlines(), start=1
-                ):
-                if field_read.search(line):
-                    offenders.append(f"{path.name}:{lineno}: {line.strip()}")
+        offenders = find_profile_internal_reads(
+            PROMPTING_SOURCE_ROOT, exempt=EXEMPT_FROM_PROFILE_SCAN
+        )
         assert offenders == [], "profile internals read outside prompting.py:\n" + (
             "\n".join(offenders)
         )
+
+
+class TestTheProfileInternalsScanItself:
+    """The scan is the only thing holding the profile abstraction shut, so a
+    hole in it enforces less than it claims while still passing."""
+
+    def test_reading_a_shape_bearing_field_elsewhere_is_reported(self):
+        for field in PROFILE_INTERNALS:
+            source = f"summary = profile.{field}\n"
+            assert _scan_snippet("domain/grading.py", source), (
+                f"reading profile.{field} outside prompting.py must be caught"
+            )
+
+    def test_the_partition_key_is_not_an_internal(self):
+        # `learner_id` is CONTEXT's "partition key for everything", and
+        # `LearnerProfileRepository.get(learner_id)` already takes it as a
+        # parameter. A repository keying by it is not depending on the
+        # profile's shape — it is using the one field whose existence is not
+        # in question. Treating it as an internal made the guard forbid
+        # persistence from storing a profile at all.
+        assert _scan_snippet(
+            "domain/repositories.py",
+            "self._profiles[profile.learner_id] = profile\n",
+        ) == []
+
+    def test_the_owning_module_may_read_them(self):
+        for field in PROFILE_INTERNALS:
+            assert _scan_snippet("domain/prompting.py", f"x = profile.{field}\n") == []
+
+    def test_the_exemption_is_by_path_not_by_filename(self):
+        # Same fault as #23, in the sibling guard: matching a bare filename
+        # would exempt any future `<subpackage>/prompting.py`.
+        assert _scan_snippet("adapters/prompting.py", "x = profile.ledger\n")
+
+    def test_every_exempt_module_actually_exists(self):
+        for module in EXEMPT_FROM_PROFILE_SCAN:
+            assert (PROMPTING_SOURCE_ROOT / module).is_file(), f"{module} has moved"
 
 
 class TestVolatileTail:
