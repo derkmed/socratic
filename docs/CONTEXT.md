@@ -28,8 +28,17 @@ the exact API calls that produced it.
 **Quiz** — one authored exercise: an explanation with blanks, produced by a single
 authoring call.
 
-**Segment** — an element of the explanation's token stream, either `text` or
+**Segment** — an element of the explanation's token stream: `text`, `math`, or
 `blank`. The explanation is a segment array, never a string with sentinels.
+
+**`text` segment** — a **restricted Markdown** subset: inline code, fenced code
+blocks with highlighting, bold, italic, lists, links. Sanitised before rendering,
+model-authored or not.
+
+**`math` segment** — LaTeX converted to **MathML server-side** by the Pipe. No
+client JS, no fonts, no CDN — the only approach that survives every `IFRAME_CSP`
+setting. A blank **may sit inside a formula**; when filled, the Pipe returns the
+re-rendered formula in the grading response it was already sending.
 
 **Blank** — one masked element. Carries mode-specific fields: Novice has `options`,
 `correct_option_id`, `reinforcement` and three `hints`; Advanced has a `rubric`.

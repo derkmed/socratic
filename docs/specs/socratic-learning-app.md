@@ -196,6 +196,19 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
   Sealing is gated on the final probe. Supersedes ADR-0003's "~1 call per Novice
   quiz" (really ~3) and ADR-0005's "~60 guesses" bound (really <=80 guesses,
   <=40 probes). -> [ADR-0009](../adr/0009-self-explanation-probe.md)
+- **Model is `claude-sonnet-5` by default**, set by an admin-level `Valve` (not
+  `UserValves` - caches are model-scoped, so per-learner choice fragments segment 1
+  and makes curation data non-comparable). $2/$10 per MTok against Opus 5's $5/$25.
+  **Build gate: Sonnet 5's minimum cacheable prefix is 1024 tokens and segment 1 is
+  borderline.** Verify criterion 7 before tuning anything on top of caching.
+- **Markdown and math render in the iframe, not by Open WebUI.** Restricted Markdown
+  subset; math converted to MathML server-side; blanks may sit inside formulas.
+  `IFRAME_CSP` is unset by default but the hardening docs recommend a value blocking
+  CDN scripts, fonts and `fetch` - so `__event_call__` is a required path, not a
+  fallback. -> [ADR-0012](../adr/0012-iframe-content-rendering.md)
+- **Latency: authoring splits into skeleton + pedagogy payload; asking a probe never
+  costs a call.** Every interaction is at most one blocking call. No fast mode.
+  -> [ADR-0011](../adr/0011-latency-budget.md)
 - **`probe_cadence` is a `UserValves` setting** (`off | final_blank_only |
   sometimes | always`, default `sometimes`), applied immediately on change.
   **Toggles switch client behaviour, never prompt text** - segment 1 stays
@@ -256,3 +269,11 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
     probe already pending is unaffected.
 29. An attempt authored under `probe_cadence: off` is identifiable as suppressed
     from the record alone, with zero probes present.
+30. A quiz renders correctly with `IFRAME_CSP` set to the value Open WebUI's
+    hardening docs recommend - formulas included, no silent blanks.
+31. Filling a blank inside a formula returns the re-rendered formula in the grading
+    response, with no additional request.
+32. Rendered Markdown is sanitised: an explanation containing a script tag renders
+    inert.
+33. The skeleton call renders a playable quiz before the pedagogy payload arrives,
+    and a learner answering in that window is handled without error.

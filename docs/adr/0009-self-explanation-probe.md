@@ -2,6 +2,8 @@
 
 Date: 2026-09-08
 Status: accepted
+Amended by: [ADR-0011](0011-latency-budget.md) (call count corrected again: a probe
+is two calls, not one, so a 2-blank Novice quiz is 3-5, not ~3)
 Amends: [ADR-0003](0003-grading-authority-and-key-custody.md) (call-count claim),
 [ADR-0005](0005-persistence-contract.md) (document bound)
 
