@@ -13,7 +13,7 @@ dependencies = []
 # The Anthropic SDK is an optional extra, never a base dependency: the domain
 # must be testable with no SDK installed (ADR-0002 portability seam, spec §5 —
 # the adapter is the only module that may import it).
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=1.4"]
 dev = ["pytest>=8", "tomli>=2; python_version < '3.11'"]
 
 [tool.hatch.build.targets.wheel]
