@@ -379,7 +379,9 @@ class TestRenderProfile:
         for path in sorted(source_root.rglob("*.py")):
             if path.name == "prompting.py":
                 continue
-            for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            for lineno, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), start=1
+                ):
                 if field_read.search(line):
                     offenders.append(f"{path.name}:{lineno}: {line.strip()}")
         assert offenders == [], "profile internals read outside prompting.py:\n" + (
