@@ -2,6 +2,8 @@
 
 Status: accepted
 Date: 2026-09-08
+Amended by: [ADR-0012](0012-iframe-content-rendering.md) (a third segment type,
+`math`)
 
 ## Decision
 
@@ -14,7 +16,10 @@ this now") either gets violated or produces an unparseable response — on the
 highest-stakes question a learner will ever ask.
 
 **The explanation is a segment array, not a string with sentinels.**
-`[{type:"text",text}, {type:"blank",blank_id}, ...]`. Rendering walks the list;
+`[{type:"text",text}, {type:"math",mathml}, {type:"blank",blank_id}, ...]`. The
+`math` type arrives with [ADR-0012](0012-iframe-content-rendering.md); a blank
+masks a **whole formula, never a term inside one**, so the array stays flat and a
+resolved blank is swapped for a `text` or `math` node. Rendering walks the list;
 filling a blank swaps one element. Sentinel strings reintroduce the parsing
 ADR-0001 removed, and character offsets are worse — models count characters badly.
 

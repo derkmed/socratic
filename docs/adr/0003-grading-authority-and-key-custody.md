@@ -2,7 +2,10 @@
 
 Status: accepted
 Date: 2026-09-08
-Amended by: [ADR-0009](0009-self-explanation-probe.md)
+Amended by: [ADR-0009](0009-self-explanation-probe.md) (call-count claim),
+[ADR-0013](0013-reactive-tutor-line.md) (the parallel tutor call is withdrawn),
+[ADR-0015](0015-iframe-pipe-transport.md) (key custody is a different process than
+stated here)
 
 ## Context
 
@@ -27,7 +30,10 @@ hint rungs. A Novice quiz costs ~1 model call end-to-end instead of ~8.
 Free recall means unbounded answers, so "grade on meaning, not wording" requires
 the model.
 
-**The key never leaves the Pipe process.** The iframe receives display fields only
+**The key never leaves the backend.** (Stated here as "the Pipe process"; per
+[ADR-0015](0015-iframe-pipe-transport.md) the domain runs as its own service, so
+the Pipe is not the boundary. The substance is unchanged.) The iframe receives
+display fields only
 — explanation, blank positions, option labels. Grading is a round trip
 (~1–5ms locally) that returns a verdict plus pre-authored feedback.
 
@@ -35,6 +41,12 @@ the model.
 immediately; any richer reactive tutor line is fired concurrently and streamed
 into the panel as the feedback animation plays. Model latency hides behind UI
 that was going to run anyway.
+
+**Withdrawn by [ADR-0013](0013-reactive-tutor-line.md).** Once ADR-0011 made the
+probe question free, this call had no payload left to carry. The reactive line is
+now a nullable field on the Advanced grading response, Novice has none, and nothing
+streams. The insight survives its mechanism: latency still hides behind the
+animation.
 
 ## Consequences
 

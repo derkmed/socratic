@@ -1,5 +1,13 @@
 # Map: Socratic Learning Web App
 
+> **Historical record.** This map is how the decisions were reached, not what they
+> currently are. Several were later revised — the reactive tutor line no longer
+> streams and is Advanced-only ([ADR-0013](../adr/0013-reactive-tutor-line.md)), and
+> `__event_call__` is not a fallback for the iframe `fetch` path
+> ([ADR-0015](../adr/0015-iframe-pipe-transport.md)). For the current design read
+> [CONTEXT.md](../CONTEXT.md), the ADRs, and
+> [the spec](../specs/socratic-learning-app.md).
+
 ## Destination
 
 We can start building when all of the following are decided and written down:

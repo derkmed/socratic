@@ -3,6 +3,10 @@
 Date: 2026-09-08
 Status: accepted
 Amends: [ADR-0009](0009-self-explanation-probe.md) (call-count claim, again)
+Amended by: [ADR-0013](0013-reactive-tutor-line.md) (the parallel tutor call this
+ADR left without a payload is withdrawn outright),
+[ADR-0014](0014-model-choice-and-effort.md) (the model is `claude-opus-5`, so the
+fast-mode rejection below applies to a model that actually offers it)
 
 ## Context
 

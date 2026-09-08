@@ -2,6 +2,10 @@
 
 Status: accepted
 Date: 2026-09-08
+Amended by: [ADR-0012](0012-iframe-content-rendering.md) and
+[ADR-0015](0015-iframe-pipe-transport.md) (the CSP question is resolved: `fetch`
+works on a default install, the domain package runs as its own service, and the
+seam is now physical rather than disciplinary)
 
 ## Context
 
@@ -26,8 +30,10 @@ nothing about the host. The Pipe/Action is a thin adapter that maps `__user__` t
 our own `LearnerId` and calls into that package.
 
 The quiz UI talks to our own code, never to Open WebUI's chat pipeline. We do not
-use `input:prompt:submit`; answers arrive via iframe `fetch` to our API if the CSP
-permits it, otherwise via `__event_call__`.
+use `input:prompt:submit`; answers arrive via iframe `fetch` to our API.
+**Resolved by [ADR-0015](0015-iframe-pipe-transport.md):** `IFRAME_CSP` is unset by
+default so `fetch` works, `__event_call__` turns out to be a different architecture
+rather than a fallback, and the prototype targets a default install only.
 
 ## Consequences
 

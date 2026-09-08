@@ -36,9 +36,12 @@ blocks with highlighting, bold, italic, lists, links. Sanitised before rendering
 model-authored or not.
 
 **`math` segment** — LaTeX converted to **MathML server-side** by the Pipe. No
-client JS, no fonts, no CDN — the only approach that survives every `IFRAME_CSP`
-setting. A blank **may sit inside a formula**; when filled, the Pipe returns the
-re-rendered formula in the grading response it was already sending.
+client JS, no fonts, no CDN, and zero payload beyond the content itself, against
+~500-600KB per render for inlined KaTeX that `srcdoc`'s opaque origin cannot even
+browser-cache. A blank **masks a whole formula, never a term inside one** — nesting
+a blank inside MathML is deferred past the prototype. A blank whose answer is a
+formula resolves to a `math` node, whose MathML the Pipe returns in the grading
+response it was already sending.
 
 **Blank** — one masked element. Carries mode-specific fields: Novice has `options`,
 `correct_option_id`, `reinforcement` and three `hints`; Advanced has a `rubric`.
@@ -54,8 +57,9 @@ evidence the learner needed more help, not less.
 **Probe** — the tutor asking *how did you arrive at that?* after a correct answer,
 and the learner's free-text reply. Fires on a coin flip per correct answer plus the
 final blank unconditionally; **the client owns the cadence**, since the model holds
-no state. The question rides the parallel tutor call that already fires during the
-celebration. A probe **mutates blank state**, so it is an event and a peer of
+no state. **Asking never costs a call**: Novice probe questions are pre-authored in
+the pedagogy payload, and an Advanced one is a nullable field on the grading
+response already in flight. A probe **mutates blank state**, so it is an event and a peer of
 `Guess`, not an annotation on one.
 
 **`probe_cadence`** — a `UserValves` setting:
@@ -126,8 +130,20 @@ the same predicate covers probes-off and dismissed probes without a branch.
 
 ## The prompt
 
-**Segment 1** — invariant tutor instructions. Byte-identical for every learner in
-the workspace, so it caches once and everyone reads it cheaply. **No
+**Model** — `claude-opus-5`, set by an admin-level `Valve`, never `UserValves`
+(caches are model-scoped, so a per-learner choice would fragment every segment 1).
+Chosen over `claude-sonnet-5` for its **512-token** minimum cacheable prefix against
+Sonnet 5's 1024: with five prefixes each smaller than one combined prefix would be,
+falling under the floor silently costs the cross-user sharing that is the whole
+point of segment 1. **Effort is `low` everywhere for now** — a per-call-type knob
+set uniformly until measurement moves it, and constant per call type because
+changing it invalidates that prefix. Thinking is never disabled.
+
+**Segment 1** — invariant tutor instructions, **one per call type**. Byte-identical
+for every learner in the workspace, so each caches once and everyone reads it
+cheaply. Five call types means five shared prefixes, not one — the invariant is
+"byte-identical across learners *for a given call type*", and the model's minimum
+cacheable prefix must be cleared by **each** of them independently. **No
 learner-specific text may ever appear here** — and that includes *omitting* text
 per learner, which splits the cache just as surely as adding it. Per-learner
 toggles switch client behaviour; instructions that genuinely must vary go in
@@ -137,6 +153,18 @@ segment 2.
 
 **Volatile tail** — guesses so far in order, then the current blank and guess.
 Never cached.
+
+**Call type** — one of the five distinct requests the system makes:
+`author_skeleton`, `author_pedagogy`, `grade_answer`, `grade_probe`,
+`fold_narrative`. Each is a method on `ModelClient`, each has its own instructions,
+its own output schema, and therefore its own segment 1 and its own cache prefix.
+Naming them is what keeps the inventory visible; a generic `complete()` would hide
+it and destroy the "this was never called" assertion the seam exists for.
+
+**Reactive tutor line** — a sentence responding to *how* a learner phrased a wrong
+answer. **Advanced only**, and a nullable field on the grading response, never a
+call of its own. Novice has none: its feedback is wholly pre-authored, so a Novice
+answer costs zero model calls without qualification. Nothing streams.
 
 **LearnerProfile** — two parts. The **ledger** is structured and exactly
 recomputed: topic counts, mode history, weak-area tallies, outcome counts,
@@ -156,4 +184,28 @@ attempts after it, so build cost tracks new activity rather than lifetime histor
 
 **Portability seam** — the line between the Open WebUI adapter and the domain
 package. Crossed by exactly one thing: the adapter calling down with a `LearnerId`.
-Nothing below it imports Open WebUI. Enforced by review and an import test.
+Nothing below it imports Open WebUI. **A process boundary, not a convention:** the
+domain runs as its own service, so an Open WebUI import below the seam would not
+resolve. The import test remains as a fast check.
+
+**Quiz service** — the separate process running the domain package and serving its
+own HTTP API. Owns the answer key, the repositories, the renderer and every model
+call. A sibling container to Open WebUI.
+
+**Pipe** — the Open WebUI adapter, and nothing else. Maps `__user__` to a
+`LearnerId`, calls the quiz service, returns the HTML the service rendered. It
+holds no domain logic and makes no model calls.
+
+**Capability token** — how a request from the iframe is authorized. HMAC-signed,
+scoped to one `QuizSessionId` and its `LearnerId`, short TTL, minted into the
+`srcdoc` at render time. The iframe is sandboxed without `allow-same-origin`, so it
+has an opaque origin and carries no cookie and no Open WebUI token — it cannot
+authenticate by any ambient means. **Each grading response returns a fresh token**
+which the iframe swaps in, so an engaged learner's session slides forward while the
+exposure window stays at minutes. The `QuizSessionId` is **not** a credential: it is
+timestamp-prefixed, near monotonic, and stamped through the audit trail.
+
+**Default install** — an Open WebUI deployment with `IFRAME_CSP` unset, which is the
+shipped default. The prototype targets this and only this. Under the hardening
+docs' recommended CSP an iframe has no `fetch`, no WebSocket and no way to reach the
+Pipe at all, which is a different architecture rather than a degraded path.

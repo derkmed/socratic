@@ -3,7 +3,11 @@
 Date: 2026-09-08
 Status: accepted
 Amended by: [ADR-0011](0011-latency-budget.md) (call count corrected again: a probe
-is two calls, not one, so a 2-blank Novice quiz is 3-5, not ~3)
+is two calls, not one, so a 2-blank Novice quiz is 3-5, not ~3),
+[ADR-0010](0010-per-learner-instruction-toggles.md) (sealing is one unified
+predicate, of which "gated on the final probe" is a special case),
+[ADR-0013](0013-reactive-tutor-line.md) (the probe question no longer rides a
+parallel call — there is no parallel call)
 Amends: [ADR-0003](0003-grading-authority-and-key-custody.md) (call-count claim),
 [ADR-0005](0005-persistence-contract.md) (document bound)
 
@@ -52,6 +56,12 @@ exactly the curation job that wants to replay it.
 **The probe question rides the existing parallel tutor call** from ADR-0003 — the
 call already fires during the celebration animation. Asking costs nothing new; only
 the reply path is new.
+
+**Superseded by [ADR-0011](0011-latency-budget.md) and
+[ADR-0013](0013-reactive-tutor-line.md).** Asking still costs nothing, by a
+different route: Novice probe questions are pre-authored in the pedagogy payload
+and an Advanced one is a nullable field on the grading response. There is no
+parallel call.
 
 ## Consequences
 
