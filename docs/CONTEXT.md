@@ -49,6 +49,16 @@ no state. The question rides the parallel tutor call that already fires during t
 celebration. A probe **mutates blank state**, so it is an event and a peer of
 `Guess`, not an annotation on one.
 
+**`probe_cadence`** — a `UserValves` setting:
+`off | final_blank_only | sometimes | always`, default `sometimes`. Flipping it
+applies **immediately**, from the next correct answer — unlike the mode toggle, no
+pre-authored content is bound to it. A probe already on screen **stands**; the
+learner's escape is to dismiss it. Recorded twice: `probe_cadence_at_authoring` on
+the attempt (so `off` is visible even when zero probes fire) and `cadence_at_fire`
+on each probe (so mid-quiz changes stay exact). **Turning probes off does not change the
+prompt**: segment 1 stays byte-identical and the client simply stops firing the
+probe. See [ADR-0010](adr/0010-per-learner-instruction-toggles.md).
+
 **Self-explanation** — the learner's reply to a probe. The richest curation signal
 in the system: a click shows someone was right, this shows whether they knew.
 
@@ -100,16 +110,19 @@ a closed tab tells us nothing, so readers apply their own age threshold.
 about quiz quality, outside the LLM conversation entirely. Separate record, so the
 attempt stays sealed.
 
-**Sealed** — an attempt that will never be written again. **Gated on the final
-probe resolving**, not on the last blank resolving: because a failed probe can
-re-open a blank in Advanced, `resolved` is not a terminal state and completion can
-fire and un-fire.
+**Sealed** — an attempt that will never be written again. One predicate: **all
+blanks resolved and no probe pending**. Because a failed probe can re-open a blank
+in Advanced, `resolved` is not a terminal state and completion can fire and un-fire;
+the same predicate covers probes-off and dismissed probes without a branch.
 
 ## The prompt
 
 **Segment 1** — invariant tutor instructions. Byte-identical for every learner in
 the workspace, so it caches once and everyone reads it cheaply. **No
-learner-specific text may ever appear here.**
+learner-specific text may ever appear here** — and that includes *omitting* text
+per learner, which splits the cache just as surely as adding it. Per-learner
+toggles switch client behaviour; instructions that genuinely must vary go in
+segment 2.
 
 **Segment 2** — learner profile, quiz, and blank rubrics. Per learner, per session.
 

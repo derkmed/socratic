@@ -86,7 +86,7 @@ and per-call token usage including `cache_read_input_tokens`.
 
 **`Probe`** (ordered, embedded, peer of `Guess`) — `blank_id`, `question`,
 `self_explanation` (nullable; the learner may dismiss), `verdict`, `reopened_blank`
-(bool), `asked_at`, `answered_at`, `message_id`. Kept separate from `Guess` because a
+(bool), `cadence_at_fire`, `asked_at`, `answered_at`, `message_id`. Kept separate from `Guess` because a
 probe mutates blank state: it is an event in the timeline, not a property of a past
 guess, and the curation job replaying "what actually happened" is the consumer that
 would be misled by nesting it.
@@ -194,6 +194,12 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
   Sealing is gated on the final probe. Supersedes ADR-0003's "~1 call per Novice
   quiz" (really ~3) and ADR-0005's "~60 guesses" bound (really <=80 guesses,
   <=40 probes). -> [ADR-0009](../adr/0009-self-explanation-probe.md)
+- **`probe_cadence` is a `UserValves` setting** (`off | final_blank_only |
+  sometimes | always`, default `sometimes`), applied immediately on change.
+  **Toggles switch client behaviour, never prompt text** - segment 1 stays
+  byte-identical however many settings the product grows; instructions that must
+  vary per learner go in segment 2.
+  -> [ADR-0010](../adr/0010-per-learner-instruction-toggles.md)
 
 ## Acceptance
 
@@ -239,3 +245,12 @@ Settled by grill after the first draft. Terms in [CONTEXT.md](../CONTEXT.md).
     probed regardless of the seed.
 24. A dismissed probe persists with a null `self_explanation` and does not block
     sealing.
+25. Segment 1 is byte-identical for two learners with different `probe_cadence`
+    settings - the same assertion as criterion 6, which is the point.
+26. With `probe_cadence: off` no probe is fired and the attempt seals on the last
+    blank resolving, via the same predicate as every other case.
+27. `final_blank_only` probes the last blank and no other.
+28. Changing `probe_cadence` mid-quiz takes effect on the next correct answer, and a
+    probe already pending is unaffected.
+29. An attempt authored under `probe_cadence: off` is identifiable as suppressed
+    from the record alone, with zero probes present.
