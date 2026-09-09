@@ -364,7 +364,10 @@ var SocraticQuiz = (function () {
             '.socratic-option[data-option-id="' + event.answer + '"]'
           );
           if (option) {
-            /* The option's label, already sanitised in the service. */
+            /* The option's label, already sanitised in the service, and
+             * inline: `payloads.label_html` renders a phrase with no block
+             * wrapper (#98), so what lands in this inline placeholder is
+             * inline markup rather than a `<p>` with paragraph margins. */
             setHtml(placeholder, option.innerHTML);
           } else {
             /* Free text the learner typed. Text, never markup: it is the one

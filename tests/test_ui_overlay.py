@@ -37,8 +37,11 @@ def option_bank_blank(blank_id: str = "b1") -> dict:
         "mode": "novice",
         "render_hint": "option_bank",
         "options": [
-            {"option_id": "o1", "text_html": "<p>entropy</p>"},
-            {"option_id": "o2", "text_html": "<p>enthalpy</p>"},
+            # Inline, the way `payloads.label_html` renders a label (#98): a
+            # `<p>` here would be a block box in the button, and a block box in
+            # the inline placeholder once the client copies it there.
+            {"option_id": "o1", "text_html": "entropy"},
+            {"option_id": "o2", "text_html": "<em>enthalpy</em>"},
         ],
     }
 
@@ -216,8 +219,8 @@ class TestTheControlComesFromTheRenderHint:
 
         assert _order_of(document, r'class="socratic-option"\s+data-option-id="(\w+)"') \
             == ["o1", "o2"]
-        assert "<p>entropy</p>" in document
-        assert "<p>enthalpy</p>" in document
+        assert ">entropy</button>" in document
+        assert "<em>enthalpy</em>" in document
 
     def test_a_text_input_renders_a_field_and_no_buttons_of_its_own(self):
         document = render(text_input_blank())

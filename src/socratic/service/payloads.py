@@ -90,14 +90,33 @@ def html_of(text: str) -> str:
     """Restricted Markdown to sanitised HTML.
 
     Model-authored or not: ADR-0012's rule is that everything rendered passes
-    through sanitisation, and this function is the only way a string becomes
-    HTML in this package.
+    through sanitisation, and this function and `label_html` below are the only
+    two ways a string becomes HTML in this package — the block render and the
+    label render, and nothing hand-rolls a third.
     """
     return sanitiser.sanitise(markdown.render_markdown(text))
 
 
+def label_html(text: str) -> str:
+    """One label — an option, a button's worth of words — to sanitised HTML.
+
+    The same restricted subset and the same sanitiser pass as `html_of`, and
+    the same untrusted input; what differs is the box. A label is a phrase, not
+    a document: `html_of("entropy")` is `<p>entropy</p>`, and that `<p>` is a
+    block the option's own chrome never asked for. The client copies an
+    option's markup into the inline placeholder when the blank resolves, so the
+    block travels into the middle of a sentence (#98).
+
+    `markdown.render_fragment` renders a label that is a phrase inline, with no
+    wrapper, and falls back to the block render for a label that carries real
+    block content — an author who writes a fenced block as an option gets a
+    fenced block, because inline-rendering one would mangle it.
+    """
+    return sanitiser.sanitise(markdown.render_fragment(text))
+
+
 def _option(option: types.Option) -> dict[str, Any]:
-    return {"option_id": option.option_id, "text_html": html_of(option.text)}
+    return {"option_id": option.option_id, "text_html": label_html(option.text)}
 
 
 def blank_body(blank: types.Blank, registry: ModeRegistry) -> dict[str, Any]:
