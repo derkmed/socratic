@@ -26,7 +26,9 @@ pytest.importorskip(
 from socratic.adapters import anthropic_client  # noqa: E402
 from socratic.domain import model_client  # noqa: E402
 from socratic.domain import modes  # noqa: E402
+from socratic.domain import output_schemas  # noqa: E402
 from socratic.domain import prompting  # noqa: E402
+from socratic.domain.types import DifficultyMode  # noqa: E402
 from tests.test_output_schemas import object_nodes  # noqa: E402
 
 CallType = prompting.CallType
@@ -38,11 +40,21 @@ ADA = prompting.LearnerProfile(
 )
 
 
-def segments_for(call_type: CallType) -> prompting.PromptSegments:
+def segments_for(
+    call_type: CallType, mode=DifficultyMode.NOVICE
+) -> prompting.PromptSegments:
+    """One assembled call, with a mode where the call type needs one.
+
+    The two authoring calls pick their schema from the mode the segments carry,
+    and `output_schemas.for_segments` refuses one that carries none rather than
+    falling back to the union (#114) - so a mode-less authoring call is not
+    something this helper can mint. The other three ignore it.
+    """
     return prompting.assemble(
         call_type,
         profile=ADA,
         probe_cadence=modes.ProbeCadence.SOMETIMES,
+        mode=mode if call_type in output_schemas.MODE_BOUND_CALLS else None,
     )
 
 
@@ -302,13 +314,48 @@ class TestTheFiveMethods:
     def test_each_one_sends_its_own_call_type(self, call_type):
         fake = FakeAnthropic()
         client = anthropic_client.AnthropicModelClient(client=fake)
-        getattr(client, call_type.value)(segments_for(call_type))
+        segments = segments_for(call_type)
+
+        getattr(client, call_type.value)(segments)
+
         sent = fake.last_request
-        assert sent["system"][0]["text"] == segments_for(call_type).segment_1.text
-        assert (
-            sent["output_config"]["format"]["schema"]
-            == anthropic_client.DEFAULT_OUTPUT_SCHEMAS[call_type]
+        assert sent["system"][0]["text"] == segments.segment_1.text
+        # The schema the *domain* selects for this call, not a mode-agnostic
+        # default. Asserting the default was #114: it admitted every mode's
+        # blank shape, so an Advanced call could satisfy it novice-shaped and
+        # then fail the Advanced validator.
+        assert sent["output_config"]["format"]["schema"] == (
+            output_schemas.for_segments(segments)
         )
+
+    @pytest.mark.parametrize("mode", [DifficultyMode.NOVICE, DifficultyMode.ADVANCED])
+    def test_an_authoring_call_is_sent_its_own_modes_blank_shape(self, mode):
+        """#114, at the seam that sends it: the blanks asked for are that
+        mode's alone, never the union of every registered mode's."""
+        fake = FakeAnthropic()
+        client = anthropic_client.AnthropicModelClient(client=fake)
+
+        client.author_skeleton(segments_for(CallType.AUTHOR_SKELETON, mode))
+
+        schema = fake.last_request["output_config"]["format"]["schema"]
+        expected = output_schemas.for_mode(mode)[CallType.AUTHOR_SKELETON]
+        assert schema == expected
+        assert schema != anthropic_client.DEFAULT_OUTPUT_SCHEMAS[
+            CallType.AUTHOR_SKELETON
+        ]
+
+    def test_a_constructor_override_still_wins(self):
+        """The `schemas=` seam has existed since #7 and keeps its meaning: a
+        caller that composed its own shapes is not overruled by the default."""
+        fake = FakeAnthropic()
+        mine = {"type": "object", "properties": {}, "additionalProperties": False}
+        client = anthropic_client.AnthropicModelClient(
+            client=fake, schemas={CallType.AUTHOR_SKELETON: mine}
+        )
+
+        client.author_skeleton(segments_for(CallType.AUTHOR_SKELETON))
+
+        assert fake.last_request["output_config"]["format"]["schema"] == mine
 
     def test_it_satisfies_the_model_client_protocol(self):
         client = anthropic_client.AnthropicModelClient(client=FakeAnthropic())

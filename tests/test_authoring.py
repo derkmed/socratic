@@ -1117,3 +1117,55 @@ class TestTheModeIsNormalisedOnTheWayIn:
             service.author("Why does heat flow?", LEARNER, mode="expert")
 
         client.assert_never_called()
+
+
+class TestTheModeReachesTheSchema:
+    """#114: Advanced authoring came back novice-shaped and 422'd on every call.
+
+    No prompt names the difficulty mode in prose - segment 1 says only that the
+    model is producing "structured output against a schema supplied with the
+    request". So the schema is the whole contract, and the mode has to reach
+    the seam that picks one. It rides on the assembled segments, which is what
+    these assert: not that a schema was chosen correctly (that is
+    `test_output_schemas.py`), but that the mode gets far enough for anything
+    to choose with.
+    """
+
+    def test_the_skeleton_call_carries_the_mode_it_was_asked_for(self):
+        _, client, _ = author(
+            skeleton_payload(
+                ("b1", "b2", "b3", "b4"),
+                blank_builder=advanced_skeleton_blank_payload,
+            ),
+            mode=DifficultyMode.ADVANCED,
+        )
+
+        call = client.calls_of(CallType.AUTHOR_SKELETON)[0]
+        assert call.segments.mode == DifficultyMode.ADVANCED
+
+    def test_the_pedagogy_call_carries_the_quizs_own_mode(self):
+        _, _, client, _ = author_both(
+            skeleton=skeleton_payload(
+                ("b1", "b2", "b3", "b4"),
+                blank_builder=advanced_skeleton_blank_payload,
+            ),
+            pedagogy={"recap": "Entropy never decreases in an isolated system."},
+            mode=DifficultyMode.ADVANCED,
+        )
+
+        call = client.calls_of(CallType.AUTHOR_PEDAGOGY)[0]
+        assert call.segments.mode == DifficultyMode.ADVANCED
+
+    def test_a_novice_call_carries_novice(self):
+        _, client, _ = author(quiz_payload())
+
+        call = client.calls_of(CallType.AUTHOR_SKELETON)[0]
+        assert call.segments.mode == DifficultyMode.NOVICE
+
+    def test_the_mode_is_the_registrys_key_not_whatever_spelling_arrived(self):
+        """`key_for` on the way in (#89), so the schema lookup cannot miss on a
+        mode that arrived off the wire as a plain string."""
+        _, client, _ = author(quiz_payload(), mode="novice")
+
+        call = client.calls_of(CallType.AUTHOR_SKELETON)[0]
+        assert call.segments.mode is DifficultyMode.NOVICE

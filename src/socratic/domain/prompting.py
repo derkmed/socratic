@@ -49,7 +49,7 @@ from typing import Mapping, Sequence
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.profiles import LearnerProfile
 from socratic.domain.records import HINT_LADDER_RUNGS
-from socratic.domain.registry import BlankRange, mode_name
+from socratic.domain.registry import BlankRange, ModeKey, mode_name
 from socratic.domain.types import (
     BlankSegment,
     MathSegment,
@@ -112,6 +112,16 @@ class PromptSegments:
 
     call_type: CallType
     segments: tuple[PromptSegment, ...]
+    mode: ModeKey | None = None
+    """The difficulty mode this call authors for, when it has one.
+
+    Carried, never branched on - the registry stays the only place a mode is
+    read for what it *means* (CONTEXT: ModeRegistry), and nothing here renders
+    it. It rides alongside `call_type` for the same reason `call_type` is here
+    at all: what a call needs before it can be sent, which for the two
+    authoring calls includes the mode whose blank shape their output schema has
+    to ask for (#114). `None` on the three calls that do not vary by mode.
+    """
 
     def _of(self, role: SegmentRole) -> PromptSegment:
         for segment in self.segments:
@@ -178,6 +188,7 @@ def assemble(
     current_guess: str | None = None,
     blank_range: BlankRange | None = None,
     hint_rung: int | None = None,
+    mode: ModeKey | None = None,
 ) -> PromptSegments:
     """Lay a request out as ordered cache segments.
 
@@ -218,6 +229,10 @@ def assemble(
         ([ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
         Omitted by every call type but `grade_answer`, and renders nothing when
         it is.
+      mode: The difficulty mode the call is for. Renders nothing - it is
+        carried so the output schema can ask for that mode's blank shape
+        (`output_schemas.for_segments`, #114). Required by the two authoring
+        calls and omitted by the other three, which do not vary by mode.
 
     Returns:
       The three segments in render order, with breakpoints on the first two.
@@ -231,6 +246,7 @@ def assemble(
 
     return PromptSegments(
         call_type=call_type,
+        mode=mode,
         segments=(
             PromptSegment(
                 role=SegmentRole.SEGMENT_1,
