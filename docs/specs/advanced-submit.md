@@ -5,6 +5,13 @@ master spec's [section 8](socratic-learning-app.md) seam, whose deterministic
 half is [`novice-submit.md`](novice-submit.md) (#6). Probe firing, cadence and
 `answer_probe` remain [#10](https://github.com/derkmed/socratic/issues/10).
 
+> **Extended by [`advanced-hint-ladder.md`](advanced-hint-ladder.md)** (#56,
+> [ADR-0016](../adr/0016-advanced-hint-rides-the-grading-response.md)). The
+> grading response now carries a **fourth** nullable field, the hint ladder's
+> rung text, and the client states the rung it selected in the volatile tail.
+> Read "one response, three things" below as four. Everything else here stands:
+> still one call, still nothing streaming, still no Novice route to any of it.
+
 ## Goal
 
 An Advanced blank takes free text and is judged on **meaning, not wording**.

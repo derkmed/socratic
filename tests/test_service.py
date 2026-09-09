@@ -673,6 +673,7 @@ class TestTheAdvancedTutorLine:
                 session_module.ModelGrading(
                     tutor_line="You reached for the macro picture.",
                     probe_question=None,
+                    hint=None,
                 )
             ),
             capability_token="rotated",
@@ -683,12 +684,39 @@ class TestTheAdvancedTutorLine:
     def test_a_model_graded_answer_without_one_carries_null(self):
         body = payloads.submission_body(
             self._submission(
-                session_module.ModelGrading(tutor_line=None, probe_question=None)
+                session_module.ModelGrading(
+                    tutor_line=None, probe_question=None, hint=None
+                )
             ),
             capability_token="rotated",
         )
 
         assert body["tutor_line_html"] is None
+
+    def test_an_advanced_rung_hint_reaches_the_wire_as_feedback_html(self):
+        """#56 / ADR-0016. The rung's text is authored on the grading response
+        and routed to `Submission.feedback`, which is the field the Novice
+        ladder already fills — so it needs no wire field of its own and the
+        overlay needs no change to show it."""
+        submission = dataclasses.replace(
+            self._submission(
+                session_module.ModelGrading(
+                    tutor_line=None,
+                    probe_question=None,
+                    hint="Ask what the second law puts a floor under.",
+                )
+            ),
+            verdict=Verdict.INCORRECT,
+            hint_rung_shown=2,
+            feedback="Ask what the second law puts a floor under.",
+            blank_resolved=False,
+        )
+
+        body = payloads.submission_body(submission, capability_token="rotated")
+
+        assert body["hint_rung_shown"] == 2
+        assert "second law puts a floor under" in body["feedback_html"]
+        assert body["revealed_option_id"] is None
 
     def test_the_deterministic_path_has_no_tutor_line_at_all(self):
         """Not merely null: the deterministic strategy never builds a

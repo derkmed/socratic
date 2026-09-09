@@ -174,15 +174,23 @@ GRADE_ANSWER: Schema = _strict(
         "verdict": VERDICT,
         "tutor_line": NULLABLE_STRING,
         "probe_question": NULLABLE_STRING,
+        "hint": NULLABLE_STRING,
     }
 )
-"""One response, three things (ADR-0013).
+"""One response, four things (ADR-0013 as extended by
+[ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
 
-The reactive tutor line and the probe question ride the grading response as
-nullable fields rather than as calls of their own, and `session._parse_grading`
-reads all three. The placeholder this replaces declared neither, so
-`additionalProperties: false` forbade exactly the two fields the ADR requires -
-and nothing raised, because both parse as absent."""
+The reactive tutor line, the probe question and the hint ladder's rung text ride
+the grading response as nullable fields rather than as calls of their own, and
+`session._parse_grading` reads all four. The placeholder this replaces declared
+neither rider, so `additionalProperties: false` forbade exactly the two fields
+ADR-0013 requires - and nothing raised, because both parse as absent.
+
+`hint` is the fourth, and the reason it is here rather than pre-authored on the
+blank: an Advanced blank carries no `hints` (the registry forbids them), so
+without this field a wrong Advanced answer had no rung text at all (#56). The
+**client** still selects the rung and states it in the volatile tail; this field
+is the text for that rung. Nullable because a correct answer has no rung."""
 
 GRADE_PROBE: Schema = _strict({"verdict": VERDICT, "correction": STRING})
 """The verdict on a self-explanation, and the correction that goes with it.
