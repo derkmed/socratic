@@ -175,6 +175,15 @@ Sealing is the completion half of it and displacement the other, and only the
 first stamps a time — so it is `is_closed`, not `sealed_at`, that the record's
 write guard, the repository and the profile job's watermark all read.
 
+**Collected records** — the write-only JSON trail of closed attempts and ratings
+under `SOCRATIC_DATA_DIR`, one file per record in a tree that mirrors the
+`learner_id` partition (ADR-0018). **Not durable state**: the service writes it and
+never reads it back, so a restart still loses every in-flight quiz. It is the audit
+trail and the corpus ADR-0006's offline job scans. Unset means the trail is simply
+not written. Written on close by default; an install-wide **flush cadence** knob on the service can force a write on every `save()` instead, so files appear
+while a quiz is being taken. Neither knob is a learner setting and neither is
+accepted from a caller.
+
 **Start this instead** — the explicit escape from the single-topic-focus rule.
 It abandons the attempt the learner has open, authors the new inquiry, and
 carries the remaining queue forward onto the attempt that replaces it. Asking a
