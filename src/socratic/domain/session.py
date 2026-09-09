@@ -3,8 +3,8 @@
 `QuizSession.submit` is a seam in the master spec's table, and it is the exact
 point where **"a Novice answer costs zero model calls"** becomes assertable
 (master spec acceptance 6 and 7). This module holds **both** halves of that
-seam — the deterministic strategy and the model-graded one; probes are
-[#10](https://github.com/derkmed/socratic/issues/10).
+seam — the deterministic strategy and the model-graded one — and the
+self-explanation probe that rides on top of them.
 
 **One response, three things** (D13,
 [ADR-0013](../../../docs/adr/0013-reactive-tutor-line.md)). The model-graded
@@ -14,12 +14,25 @@ tutor line (nullable) together. There is no second request and nothing streams:
 the parallel tutor call ADR-0003 described is withdrawn, and adding one back
 here would falsify master spec acceptance 9.
 
-**A probe question arriving is not a probe firing.** The question rides the
-response and is handed to the caller on `ModelGrading`; deciding *whether* to
-ask it, appending a `records.Probe`, the cadence coin flip and `answer_probe`
-are all [#10](https://github.com/derkmed/socratic/issues/10). Nothing here
-appends a probe, so the seal predicate's probe clause is as inert — and as live
-— as it was before.
+**Asking a probe costs no model call; answering one costs exactly one** (D9,
+ADR-0009 as superseded by ADR-0011 and ADR-0013). The question is already in
+hand either way — pre-authored on the blank for Novice, riding the one
+`grade_answer` response for Advanced — so `submit` fires a probe without a
+request. `answer_probe` is a **separate method** for exactly that reason: it
+makes one `grade_probe` call, and folding it into `submit` would put a call on
+the path master spec acceptance 6 says has none.
+
+**The cadence is client-owned and reproducible** (ADR-0009). A coin flip per
+correct answer plus the final blank unconditionally, gated by `probe_cadence`,
+drawn from an **injected** `random.Random` so a seeded one makes the sequence
+exact in tests. The final blank short-circuits before the draw, which is what
+makes acceptance 17's guarantee hold for every seed rather than for the ones
+that were tried.
+
+**What a failed probe does is a `ModePolicy` field, never a branch.** Advanced
+re-opens the blank with the ladder resuming where it left off, capped at one
+re-open; Novice corrects and leaves it resolved. `answer_probe` reads
+`probe_failure_behavior` off the policy, so a third mode is a registry entry.
 
 **Dispatch reads `ModePolicy.grading_strategy`, never the mode.** `_GRADERS`
 maps a `GradingStrategy` to the function that implements it, and `submit` looks
@@ -49,16 +62,19 @@ one.
 ordered and already bounded, so resolution and the ladder rung are read off the
 record rather than tracked alongside it (D1). The one predicate that decides
 sealing — **all blanks resolved and no probe pending** (D10, CONTEXT: Sealed) —
-is written here with both clauses live, so the no-probe case is a special case
-of the predicate rather than a "last blank resolved" check that #10 would have
-to unwrite.
+is written here with both clauses live. Probes on, probes off and a **dismissed**
+probe are all the same predicate and never a second path: dismissal is a marker
+on the record (`records.Probe.dismissed_at`), not a branch in `is_sealable`.
 
-Specs: `docs/specs/novice-submit.md`, `docs/specs/advanced-submit.md`.
+Specs: `docs/specs/novice-submit.md`, `docs/specs/advanced-submit.md`,
+`docs/specs/self-explanation-probes.md`.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import random
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Sequence
@@ -69,7 +85,11 @@ from socratic.domain import prompting
 from socratic.domain import records
 from socratic.domain import registry as registry_module
 from socratic.domain import repositories
-from socratic.domain.modes import GradingStrategy
+from socratic.domain.modes import (
+    GradingStrategy,
+    ProbeCadence,
+    ProbeFailureBehavior,
+)
 from socratic.domain.records import QuizAttempt, Verdict
 from socratic.domain.types import Blank
 
@@ -79,6 +99,16 @@ HINT_LADDER_RUNGS = records.HINT_LADDER_RUNGS
 _VERDICT = "verdict"
 _TUTOR_LINE = "tutor_line"
 _PROBE_QUESTION = "probe_question"
+_CORRECTION = "correction"
+
+MAX_REOPENS_PER_BLANK = 1
+"""A blank re-opens at most once; a second failed probe reveals and moves on
+(ADR-0009). Named rather than inlined because it is the same kind of bound as
+`HINT_LADDER_RUNGS` — a pedagogy decision, not an implementation detail."""
+
+_COIN = 0.5
+"""The coin flip behind `sometimes`: roughly every second correct answer
+(ADR-0009). A learner cannot game a rhythm that does not exist."""
 
 
 class BlankAlreadyResolved(ValueError):
@@ -87,6 +117,15 @@ class BlankAlreadyResolved(ValueError):
     A `ValueError` rather than a silent no-op: the client is authoritative for
     quiz state, so a submission against a resolved blank means the client's
     view and the record have diverged, and swallowing it would hide that.
+    """
+
+
+class NoPendingProbe(ValueError):
+    """A probe reply or dismissal arrived for a blank with no probe waiting.
+
+    A `ValueError` for the reason `BlankAlreadyResolved` is one: the client is
+    authoritative for quiz state, so a reply to a probe the record does not
+    have means the two views have diverged, and swallowing it hides that.
     """
 
 
@@ -131,6 +170,12 @@ class Submission:
 
     `model_grading` is non-null only on the model-graded path. There is
     deliberately no `tutor_line` attribute here (D13).
+
+    `probe_asked` is the `records.Probe` this submission fired, already
+    appended to the attempt, or `None` when the cadence said no. Handing the
+    record back rather than a bare question is what lets a caller tell "the
+    tutor asked" from "the tutor had a question and did not ask it" — and the
+    probe carries the `cadence_at_fire` that decided it.
     """
 
     verdict: Verdict
@@ -141,6 +186,38 @@ class Submission:
     blank_resolved: bool
     attempt_sealed: bool
     model_grading: ModelGrading | None = None
+    probe_asked: records.Probe | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeAnswer:
+    """What one graded self-explanation did.
+
+    `blank_reopened` and `blank_resolved` are separate because they are not
+    each other's negation: under `CORRECT_AND_RESOLVE` a failed probe re-opens
+    nothing and the blank stays resolved, and under `REOPEN_BLANK` with the cap
+    already spent the same pair holds for a different reason.
+
+    `revealed_option_id` is non-null only on that second case — the "reveals
+    and moves on" of ADR-0009, mirroring rung three — and only for a blank that
+    has an option id at all. An Advanced blank has none, and its rubric is not
+    one (D4).
+    """
+
+    verdict: Verdict
+    correction: str | None
+    blank_reopened: bool
+    blank_resolved: bool
+    revealed_option_id: str | None
+    attempt_sealed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeDismissal:
+    """What waving a probe away did. No verdict, because nothing was graded."""
+
+    blank_resolved: bool
+    attempt_sealed: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,6 +231,12 @@ class _Grade:
     `model_call` is what a strategy that consulted the model wants stamped on
     the attempt. The strategy builds the record and the session writes it, so
     persistence stays in one place.
+
+    `probe_question` is the question this strategy has available to ask, filled
+    only on a correct verdict. It is the one field that erases the two routes a
+    probe question travels: the deterministic strategy reads it off the blank
+    where the pedagogy payload pre-authored it, the model-graded one off the
+    response it just received, and `submit` reads neither — it reads this.
     """
 
     verdict: Verdict
@@ -162,6 +245,7 @@ class _Grade:
     revealed_option_id: str | None
     model_grading: ModelGrading | None = None
     model_call: records.ModelCallRecord | None = None
+    probe_question: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +263,12 @@ class _GradingContext:
     submitted: str
     ordinal: int
     """Which attempt at this blank this is, 1-based."""
+
+    prior_wrong: int
+    """How many guesses at this blank were wrong. The ladder rung, not the
+    ordinal: after a probe re-opens a blank the ordinal counts a correct answer
+    too, and the ladder must resume where it left off rather than one rung on
+    from a right answer."""
 
     attempt: QuizAttempt
     profile: prompting.LearnerProfile
@@ -205,15 +295,24 @@ def _hint_for_rung(blank: Blank, rung: int) -> str | None:
     return None
 
 
-def _ladder_rung(ordinal: int) -> int:
-    """Which rung a wrong answer lands on.
+def _ladder_rung(prior_wrong: int) -> int:
+    """Which rung a wrong answer lands on: the next one, capped at three.
 
-    Every prior guess on an unresolved blank was wrong — a correct one would
-    have resolved it — so the attempt ordinal *is* the rung, capped at three.
+    Counted from **wrong** answers rather than from the attempt ordinal. On a
+    blank that has never been probed the two are the same number — every prior
+    guess on an unresolved blank was wrong, because a correct one would have
+    resolved it — which is why no ladder behaviour moves.
+
+    They part company once a failed probe re-opens a blank, and that is the
+    whole point: the guesses then include the correct answer that fired the
+    probe, and counting it as a rung would skip one. **The ladder resumes where
+    it left off** (ADR-0009, CONTEXT: Hint ladder / rung) — a failed probe is
+    evidence the learner needed more help, not less.
+
     Shared by both strategies: a wrong free-text answer walks the same ladder
     as a wrong click.
     """
-    return min(ordinal, HINT_LADDER_RUNGS)
+    return min(prior_wrong + 1, HINT_LADDER_RUNGS)
 
 
 def _grade_against_the_key(context: _GradingContext) -> _Grade:
@@ -237,9 +336,10 @@ def _grade_against_the_key(context: _GradingContext) -> _Grade:
             hint_rung_shown=None,
             feedback=blank.reinforcement,
             revealed_option_id=None,
+            probe_question=blank.probe_question,
         )
 
-    rung = _ladder_rung(context.ordinal)
+    rung = _ladder_rung(context.prior_wrong)
     return _Grade(
         verdict=Verdict.INCORRECT,
         hint_rung_shown=rung,
@@ -295,9 +395,10 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
             revealed_option_id=None,
             model_grading=grading,
             model_call=call,
+            probe_question=grading.probe_question,
         )
 
-    rung = _ladder_rung(context.ordinal)
+    rung = _ladder_rung(context.prior_wrong)
     return _Grade(
         verdict=verdict,
         hint_rung_shown=rung,
@@ -372,6 +473,62 @@ def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
     )
 
 
+def _parse_probe_grading(content: str) -> "tuple[Verdict, str | None]":
+    """Read a `grade_probe` response: the verdict and a nullable correction.
+
+    The same shape as `_parse_grading` and deliberately its own function rather
+    than a parameterised one: the two calls have two output schemas, and a
+    shared parser that tolerated either would accept a `tutor_line` here, where
+    segment 1 asks for a correction addressing what this learner actually said.
+
+    Raises:
+      GradingParseError: On anything that is not an object carrying a known
+        verdict and, at most, a string-or-null correction.
+    """
+    try:
+        payload = json.loads(content)
+    except ValueError as error:
+        raise GradingParseError(
+            f"the probe grading response is not JSON: {error}"
+        ) from None
+    if not isinstance(payload, dict):
+        raise GradingParseError(
+            f"the probe grading response is not an object: "
+            f"{type(payload).__name__}"
+        )
+
+    raw = payload.get(_VERDICT)
+    if not isinstance(raw, str):
+        raise GradingParseError(
+            f"the probe grading response carries no {_VERDICT!r} string"
+        )
+    try:
+        verdict = Verdict(raw)
+    except ValueError:
+        known = ", ".join(sorted(member.value for member in Verdict))
+        raise GradingParseError(
+            f"unknown probe verdict {raw!r}; expected one of {known}"
+        ) from None
+
+    return verdict, _optional_line(payload, _CORRECTION)
+
+
+def _render_self_explanation(probe: records.Probe, self_explanation: str) -> str:
+    """The reply, carrying the question it answers, for the volatile tail.
+
+    `prompting.assemble` takes a single "under consideration" string, and for
+    this call the pair is what the model needs: the question was chosen by the
+    client — pre-authored for Novice, model-authored a call ago for Advanced —
+    so the request has to say which one is being answered. Rendered here for
+    the reason `_render_guesses` is: the assembler has no business knowing the
+    `Probe` shape.
+    """
+    return (
+        f"self-explanation {self_explanation!r} in reply to the probe "
+        f"{probe.question!r}"
+    )
+
+
 def _optional_line(payload: Mapping[str, Any], name: str) -> str | None:
     """One nullable string rider, absent and null read the same way."""
     value = payload.get(name)
@@ -402,14 +559,36 @@ def guesses_for(attempt: QuizAttempt, blank_id: str) -> tuple[records.Guess, ...
     return tuple(guess for guess in attempt.guesses if guess.blank_id == blank_id)
 
 
+def probes_for(attempt: QuizAttempt, blank_id: str) -> tuple[records.Probe, ...]:
+    """Every probe fired against one blank, in the order fired."""
+    return tuple(probe for probe in attempt.probes if probe.blank_id == blank_id)
+
+
+def reopens_of(attempt: QuizAttempt, blank_id: str) -> int:
+    """How many times a failed probe has re-opened this blank. At most one."""
+    return sum(1 for probe in probes_for(attempt, blank_id) if probe.reopened_blank)
+
+
 def is_blank_resolved(attempt: QuizAttempt, blank_id: str) -> bool:
     """Whether a blank is finished: answered correctly, or revealed.
 
     Derived rather than stored, so there is no second copy of the truth to
-    disagree with `attempt.guesses`.
+    disagree with `attempt.guesses` and `attempt.probes`.
+
+    `resolved` is **not terminal** (D10, CONTEXT: Sealed). A failed Advanced
+    probe re-opens the blank, so a correct answer resolves it only until a
+    re-open voids that answer: each re-open consumes exactly the one correct
+    guess it followed, which is why the first clause is a comparison rather
+    than an `any`. Re-opens are zero on every blank that has never been probed,
+    where the clause reads exactly as `any(... is CORRECT)` did before.
+
+    A revealed blank stays resolved regardless — three wrong answers is the end
+    of the ladder, and no probe can fire on one, because probes follow correct
+    answers only.
     """
     guesses = guesses_for(attempt, blank_id)
-    if any(guess.verdict is Verdict.CORRECT for guess in guesses):
+    correct = sum(1 for guess in guesses if guess.verdict is Verdict.CORRECT)
+    if correct > reopens_of(attempt, blank_id):
         return True
     wrong = sum(1 for guess in guesses if guess.verdict is Verdict.INCORRECT)
     return wrong >= HINT_LADDER_RUNGS
@@ -418,19 +597,19 @@ def is_blank_resolved(attempt: QuizAttempt, blank_id: str) -> bool:
 def has_pending_probe(attempt: QuizAttempt) -> bool:
     """Whether a probe is still waiting on the learner.
 
-    The second clause of the seal predicate. Nothing in this build fires a
-    probe, so today this is always false for an attempt the session created —
-    but the clause is live, and an attempt carrying an unanswered probe will
-    not seal.
+    The second clause of the seal predicate: **unanswered and not dismissed**.
 
-    A **dismissed** probe is not yet distinguishable from a pending one: both
-    persist with a null `self_explanation` (`records.Probe`), and the record
-    has no dismissal marker. Blocking is the conservative reading — an attempt
-    that has not sealed can still seal later, while one sealed early can never
-    be written again. [#10](https://github.com/derkmed/socratic/issues/10),
-    which owns probe firing and dismissal, completes the distinction.
+    Dismissal is read off the record (`records.Probe.dismissed_at`) rather than
+    handled by a second sealing path. That is the whole of acceptance 18 — a
+    dismissed probe persists with a null `self_explanation`, exactly as a
+    pending one does, and stops blocking because the marker says the learner
+    declined it. `is_sealable` is unchanged, and one predicate still serves
+    probes on, off and dismissed alike (D10, ADR-0010).
     """
-    return any(not probe.is_answered for probe in attempt.probes)
+    return any(
+        not probe.is_answered and not probe.is_dismissed
+        for probe in attempt.probes
+    )
 
 
 def is_sealable(attempt: QuizAttempt) -> bool:
@@ -440,7 +619,7 @@ def is_sealable(attempt: QuizAttempt) -> bool:
     last blank resolved". Because a failed Advanced probe can re-open a blank,
     `resolved` is not terminal and completion can fire and un-fire (D10,
     CONTEXT: Sealed); a completion check written around the last blank would be
-    correct today and wrong the moment #10 lands.
+    correct until the first probe failed.
     """
     every_blank_resolved = all(
         is_blank_resolved(attempt, blank.blank_id) for blank in attempt.quiz.blanks
@@ -458,6 +637,7 @@ class QuizSession:
         attempts: repositories.AttemptRepository,
         registry: registry_module.ModeRegistry | None = None,
         clock: ids.Clock = ids.system_clock,
+        rng: random.Random | None = None,
     ) -> None:
         """Wire the service.
 
@@ -474,11 +654,17 @@ class QuizSession:
           clock: Milliseconds since the epoch. Injected so a frozen clock makes
             each guess's `created_at` and the attempt's `sealed_at`
             deterministic.
+          rng: The source of the probe cadence's coin flip. Injected for the
+            same reason `clock` is: a seeded `random.Random` makes the fired /
+            not-fired sequence reproducible in tests (acceptance 17), and the
+            module-level `random` functions would make it global state instead.
+            Defaults to a fresh unseeded `random.Random`.
         """
         self._model_client = model_client
         self._attempts = attempts
         self._registry = registry or registry_module.default_registry()
         self._clock = clock
+        self._rng = rng or random.Random()
 
     def submit(
         self,
@@ -488,6 +674,7 @@ class QuizSession:
         blank_id: str,
         submitted: str,
         profile: prompting.LearnerProfile | None = None,
+        probe_cadence: ProbeCadence | None = None,
     ) -> Submission:
         """Grade one submission, record it, and seal the attempt if it is done.
 
@@ -502,6 +689,13 @@ class QuizSession:
             an empty profile for this learner exactly as
             `QuizAuthoring.author` does; reading a stored one is
             [#16](https://github.com/derkmed/socratic/issues/16).
+          probe_cadence: The learner's **current** `UserValves` setting, which
+            is the caller's to supply because flipping it applies immediately
+            (ADR-0010). Defaults to the attempt's
+            `probe_cadence_at_authoring`, so a caller that never touches the
+            setting behaves as the attempt was authored. A change takes effect
+            from this submission on; a probe already pending is not revisited,
+            which is master spec acceptance 20.
 
         Returns:
           The verdict, the feedback that goes with it, the ladder rung showing,
@@ -527,12 +721,16 @@ class QuizSession:
 
         policy = self._registry.policy_for(attempt.mode)
         grader = _GRADERS[policy.grading_strategy]
-        ordinal = len(guesses_for(attempt, blank_id)) + 1
+        prior = guesses_for(attempt, blank_id)
+        ordinal = len(prior) + 1
         grade = grader(
             _GradingContext(
                 blank=blank,
                 submitted=submitted,
                 ordinal=ordinal,
+                prior_wrong=sum(
+                    1 for guess in prior if guess.verdict is Verdict.INCORRECT
+                ),
                 attempt=attempt,
                 profile=profile
                 or prompting.LearnerProfile(learner_id=learner_id),
@@ -555,6 +753,15 @@ class QuizSession:
         if grade.model_call is not None:
             attempt = attempt.with_model_call(grade.model_call)
 
+        cadence = (
+            attempt.probe_cadence_at_authoring
+            if probe_cadence is None
+            else probe_cadence
+        )
+        probe = self._probe_to_fire(attempt, blank_id, grade, cadence, now)
+        if probe is not None:
+            attempt = attempt.with_probe(probe)
+
         sealed = is_sealable(attempt)
         if sealed:
             attempt = attempt.sealed(now)
@@ -569,6 +776,247 @@ class QuizSession:
             blank_resolved=is_blank_resolved(attempt, blank_id),
             attempt_sealed=sealed,
             model_grading=grade.model_grading,
+            probe_asked=probe,
+        )
+
+    # --- Probes ---------------------------------------------------------------
+
+    def answer_probe(
+        self,
+        *,
+        learner_id: str,
+        attempt_id: str,
+        blank_id: str,
+        self_explanation: str,
+        profile: prompting.LearnerProfile | None = None,
+    ) -> ProbeAnswer:
+        """Grade one self-explanation, and apply what a failure does.
+
+        **Exactly one model call**, `grade_probe`, in both modes (master spec
+        acceptance 8). This is a separate method from `submit` for precisely
+        that reason: a Novice *answer* is free and a Novice probe *reply* is
+        not, and one method could not carry both claims to a stub.
+
+        What a failed probe does is `ModePolicy.probe_failure_behavior`, read
+        from the registry rather than branched on (D9, ADR-0009). Advanced
+        re-opens the blank with the ladder resuming where it left off, capped at
+        one re-open per blank; Novice corrects the misconception and leaves the
+        blank resolved, because re-opening a two-option bank whose answer the
+        learner was just told is degenerate.
+
+        Args:
+          learner_id: Whose partition the attempt lives in.
+          attempt_id: The attempt being worked through.
+          blank_id: Which blank's pending probe is being answered.
+          self_explanation: The learner's free-text reply. The richest signal
+            the system collects, and captured verbatim.
+          profile: As `submit`; defaulted to an empty profile for this learner.
+
+        Returns:
+          The verdict, the correction that goes with it, and what happened to
+          the blank and the attempt.
+
+        Raises:
+          KeyError: If there is no such attempt, or no policy for its mode.
+          NoPendingProbe: If no probe on that blank is waiting on the learner.
+          GradingParseError: If the response cannot be read.
+          ValueError: If the attempt is already sealed.
+        """
+        attempt = self._attempts.get(learner_id, attempt_id)
+        position, probe = self._pending_probe(attempt, blank_id)
+        blank = attempt.quiz.blank(blank_id)
+        policy = self._registry.policy_for(attempt.mode)
+
+        segments = prompting.assemble(
+            prompting.CallType.GRADE_PROBE,
+            profile=profile or prompting.LearnerProfile(learner_id=learner_id),
+            probe_cadence=attempt.probe_cadence_at_authoring,
+            quiz=attempt.quiz,
+            guesses=_render_guesses(attempt.guesses),
+            current_blank_id=blank_id,
+            current_guess=_render_self_explanation(probe, self_explanation),
+        )
+        response = self._model_client.grade_probe(segments)
+        verdict, correction = _parse_probe_grading(response.content)
+
+        reopen = (
+            verdict is Verdict.INCORRECT
+            and policy.probe_failure_behavior is ProbeFailureBehavior.REOPEN_BLANK
+            and reopens_of(attempt, blank_id) < MAX_REOPENS_PER_BLANK
+        )
+        revealed = (
+            blank.correct_option_id
+            if verdict is Verdict.INCORRECT
+            and policy.probe_failure_behavior is ProbeFailureBehavior.REOPEN_BLANK
+            and not reopen
+            else None
+        )
+
+        now = self._now()
+        attempt = attempt.with_probe_resolved(
+            position,
+            dataclasses.replace(
+                probe,
+                self_explanation=self_explanation,
+                verdict=verdict,
+                reopened_blank=reopen,
+                answered_at=now,
+                message_id=response.message_id,
+            ),
+        ).with_model_call(
+            records.ModelCallRecord(
+                call_type=prompting.CallType.GRADE_PROBE.value,
+                message_id=response.message_id,
+                usage=response.token_usage(),
+            )
+        )
+
+        sealed = is_sealable(attempt)
+        if sealed:
+            attempt = attempt.sealed(now)
+        self._attempts.save(attempt)
+
+        return ProbeAnswer(
+            verdict=verdict,
+            correction=correction,
+            blank_reopened=reopen,
+            blank_resolved=is_blank_resolved(attempt, blank_id),
+            revealed_option_id=revealed,
+            attempt_sealed=sealed,
+        )
+
+    def dismiss_probe(
+        self, *, learner_id: str, attempt_id: str, blank_id: str
+    ) -> ProbeDismissal:
+        """Wave a pending probe away. **No model call.**
+
+        The learner's escape, and the reason a probe already on screen stands
+        when `probe_cadence` is turned off mid-quiz: the question is never
+        withdrawn — withdrawing one while someone is typing an answer to it is
+        worse than one more probe — so declining it is the only cancellation
+        path, and it has no partial state (ADR-0010).
+
+        The probe persists with a null `self_explanation` and a stamped
+        `dismissed_at`, and stops blocking the seal predicate (acceptance 18).
+
+        Raises:
+          KeyError: If there is no such attempt.
+          NoPendingProbe: If no probe on that blank is waiting on the learner.
+          ValueError: If the attempt is already sealed.
+        """
+        attempt = self._attempts.get(learner_id, attempt_id)
+        position, probe = self._pending_probe(attempt, blank_id)
+
+        now = self._now()
+        attempt = attempt.with_probe_resolved(
+            position, dataclasses.replace(probe, dismissed_at=now)
+        )
+
+        sealed = is_sealable(attempt)
+        if sealed:
+            attempt = attempt.sealed(now)
+        self._attempts.save(attempt)
+
+        return ProbeDismissal(
+            blank_resolved=is_blank_resolved(attempt, blank_id),
+            attempt_sealed=sealed,
+        )
+
+    # --- Internals ------------------------------------------------------------
+
+    def _probe_to_fire(
+        self,
+        attempt: QuizAttempt,
+        blank_id: str,
+        grade: _Grade,
+        cadence: ProbeCadence,
+        now: datetime,
+    ) -> records.Probe | None:
+        """The probe this submission fires, or `None`.
+
+        Three gates, cheapest and most decisive first, so the RNG is drawn on
+        as few paths as possible and the seeded sequence stays a function of
+        correct answers alone:
+
+        1. Only a correct answer is ever probed.
+        2. The cadence decides, and only `sometimes` draws a coin.
+        3. There has to be a question to ask, and room for it on the blank.
+
+        Gate 3 is last because it is the one that can be absent for a reason
+        that has nothing to do with the learner — the pedagogy payload landing
+        after the skeleton (master spec acceptance 5). A blank in that window
+        costs the learner the probe, not the verdict, and it does not perturb
+        the coin.
+        """
+        if grade.verdict is not Verdict.CORRECT:
+            return None
+        if not self._cadence_says_probe(attempt, blank_id, cadence):
+            return None
+        if grade.probe_question is None:
+            return None
+        if len(probes_for(attempt, blank_id)) >= records.MAX_PROBES_PER_BLANK:
+            return None
+
+        return records.Probe(
+            blank_id=blank_id,
+            question=grade.probe_question,
+            self_explanation=None,
+            verdict=None,
+            reopened_blank=False,
+            cadence_at_fire=cadence,
+            asked_at=now,
+            answered_at=None,
+            message_id=None,
+        )
+
+    def _cadence_says_probe(
+        self, attempt: QuizAttempt, blank_id: str, cadence: ProbeCadence
+    ) -> bool:
+        """The client-owned cadence: a coin flip, plus the final blank.
+
+        **The final blank short-circuits before the draw**, which is what makes
+        "the final blank is always probed regardless of the seed" (acceptance
+        17) structural rather than lucky: on that blank the RNG is not consulted
+        at all, so no seed can decide otherwise.
+
+        The final blank is the last one the quiz *declares*, not the last one
+        the learner happens to resolve. Declared order is the same thing when a
+        learner works through the explanation in order, and unlike resolution
+        order it is fixed before the attempt starts — which is what acceptance
+        19's "the last blank and no other" is checkable against.
+        """
+        is_final = attempt.quiz.blanks[-1].blank_id == blank_id
+
+        if cadence is ProbeCadence.OFF:
+            return False
+        if cadence is ProbeCadence.ALWAYS:
+            return True
+        if cadence is ProbeCadence.FINAL_BLANK_ONLY:
+            return is_final
+        return is_final or self._rng.random() < _COIN
+
+    def _pending_probe(
+        self, attempt: QuizAttempt, blank_id: str
+    ) -> "tuple[int, records.Probe]":
+        """The blank's probe still waiting on the learner, and where it sits.
+
+        The position rather than the probe alone, because two probes on one
+        blank can compare equal under a frozen clock and the record is written
+        back by position.
+
+        Raises:
+          NoPendingProbe: If there is none.
+        """
+        for position, probe in enumerate(attempt.probes):
+            if (
+                probe.blank_id == blank_id
+                and not probe.is_answered
+                and not probe.is_dismissed
+            ):
+                return position, probe
+        raise NoPendingProbe(
+            f"no probe on blank {blank_id!r} of attempt {attempt.attempt_id} is "
+            "waiting on the learner"
         )
 
     def _now(self) -> datetime:

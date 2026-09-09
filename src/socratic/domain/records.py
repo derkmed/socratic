@@ -147,6 +147,14 @@ class Probe:
 
     `cadence_at_fire` is recorded alongside the attempt's
     `probe_cadence_at_authoring` so a mid-quiz change to the setting stays exact.
+
+    `dismissed_at` is what separates a dismissed probe from one still waiting on
+    the learner. Both persist with a null `self_explanation`, so without the
+    marker the two states are identical from the record alone - and one seal
+    predicate cannot then honour both "a pending probe blocks sealing"
+    (acceptance 16) and "a dismissed one does not" (acceptance 18). It is a
+    marker on the probe rather than a second clause in the predicate, so sealing
+    stays a single question asked of a single collection.
     """
 
     blank_id: str
@@ -158,10 +166,13 @@ class Probe:
     asked_at: datetime
     answered_at: datetime | None
     message_id: str | None
+    dismissed_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.is_answered and self.verdict is None:
             raise ValueError("an answered probe carries a verdict")
+        if self.is_answered and self.is_dismissed:
+            raise ValueError("a probe is answered or dismissed, never both")
         if not self.is_answered:
             if self.verdict is not None:
                 raise ValueError("an unanswered probe carries no verdict")
@@ -171,6 +182,16 @@ class Probe:
     @property
     def is_answered(self) -> bool:
         return self.self_explanation is not None
+
+    @property
+    def is_dismissed(self) -> bool:
+        """The learner waved the question away (ADR-0010).
+
+        The escape that lets a probe already on screen *stand* when
+        `probe_cadence` is turned off mid-quiz: the question is not withdrawn,
+        the learner declines it, and the attempt is free to seal.
+        """
+        return self.dismissed_at is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +279,29 @@ class QuizAttempt:
     def with_probe(self, probe: Probe) -> "QuizAttempt":
         self._refuse_if_sealed("record a probe against")
         return dataclasses.replace(self, probes=(*self.probes, probe))
+
+    def with_probe_resolved(self, position: int, probe: Probe) -> "QuizAttempt":
+        """Swap a pending probe for its answered or dismissed self, in place.
+
+        The reply to a probe is the second half of the same event, not a new
+        one, so it replaces the pending record rather than appending beside it -
+        a curation job replaying the timeline would otherwise see the tutor ask
+        the same question twice. `with_probe` stays the append; this is the only
+        write on an attempt that is not one, and it is still a new value.
+
+        Addressed by position rather than by value because two pending probes on
+        the same blank can compare equal under a frozen clock, and the caller -
+        which found the probe by scanning `probes` - already knows which one it
+        means.
+
+        Raises:
+          IndexError: If there is no probe at `position`.
+          ValueError: If the attempt is sealed.
+        """
+        self._refuse_if_sealed("resolve a probe against")
+        probes = list(self.probes)
+        probes[position] = probe
+        return dataclasses.replace(self, probes=tuple(probes))
 
     def with_model_call(self, call: ModelCallRecord) -> "QuizAttempt":
         self._refuse_if_sealed("record a model call against")

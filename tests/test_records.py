@@ -186,6 +186,26 @@ class TestProbe:
         with pytest.raises(dataclasses.FrozenInstanceError):
             _probe().self_explanation = "something else"
 
+    def test_a_dismissed_probe_is_distinguishable_from_a_pending_one(self):
+        # Issue #10: both persist with a null `self_explanation`, so without a
+        # dismissal marker the seal predicate cannot honour acceptance 16 (a
+        # pending probe blocks) and acceptance 18 (a dismissed one does not) at
+        # once. `dismissed_at` is what tells them apart from the record alone.
+        pending = _probe(
+            self_explanation=None, verdict=None, answered_at=None, message_id=None
+        )
+        dismissed = dataclasses.replace(pending, dismissed_at=LATER)
+
+        assert pending.is_dismissed is False
+        assert dismissed.is_dismissed is True
+        assert dismissed.is_answered is False
+        assert dismissed.self_explanation is None
+        assert dismissed.dismissed_at == LATER
+
+    def test_a_probe_cannot_be_both_answered_and_dismissed(self):
+        with pytest.raises(ValueError, match="dismissed"):
+            _probe(dismissed_at=LATER)
+
 
 class TestQuizAttempt:
     def test_an_attempt_opens_in_flight_with_an_unset_sealed_at(self):
@@ -276,6 +296,39 @@ class TestQuizAttempt:
         attempt = _attempt().with_model_call(call)
         assert [c.message_id for c in attempt.model_calls] == ["msg_01skeleton"]
         assert attempt.model_calls[0].usage.cache_read_input_tokens == 0
+
+    def test_a_pending_probe_is_swapped_for_its_answered_self_in_place(self):
+        # A probe's reply is the second half of the same event, not a new one,
+        # so it replaces the pending probe rather than appending beside it -
+        # otherwise a curation job replaying the timeline sees the tutor ask
+        # twice. `with_probe` stays the append; this is the only write on the
+        # attempt that is not one.
+        pending = _probe(
+            self_explanation=None, verdict=None, answered_at=None, message_id=None
+        )
+        attempt = _attempt().with_probe(pending)
+        answered = dataclasses.replace(
+            pending,
+            self_explanation="Disorder increases.",
+            verdict=Verdict.CORRECT,
+            answered_at=LATER,
+            message_id="msg_01probe",
+        )
+
+        resolved = attempt.with_probe_resolved(0, answered)
+
+        assert len(resolved.probes) == 1
+        assert resolved.probes[0].is_answered is True
+        assert attempt.probes[0].is_answered is False, "the original is untouched"
+
+    def test_resolving_a_probe_that_is_not_there_is_an_error(self):
+        with pytest.raises(IndexError):
+            _attempt().with_probe_resolved(0, _probe())
+
+    def test_a_sealed_attempt_resolves_no_probe(self):
+        sealed = _attempt().sealed(LATER)
+        with pytest.raises(ValueError, match="sealed"):
+            sealed.with_probe_resolved(0, _probe())
 
 
 class TestSealing:
