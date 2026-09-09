@@ -241,6 +241,11 @@ def test_the_child_interpreter_reports_non_ascii_diagnostics_intact(monkeypatch)
 # what fails on the pull request rather than in the container.
 
 SERVICE_PACKAGE = "service"
+UI_PACKAGE = "ui"
+"""The overlay package (#13). Outside the domain for the same reason the
+service is: it reaches `socratic.rendering`, and the domain is stdlib-only."""
+
+SHELL_PACKAGES = (SERVICE_PACKAGE, UI_PACKAGE)
 
 OPEN_WEBUI_ROOTS = frozenset({"open_webui", "openwebui"})
 
@@ -267,11 +272,27 @@ def test_the_domain_does_not_import_the_service():
     while every existing guard stayed green.
     """
     offenders = {
+        str(path): sorted(modules & set(SHELL_PACKAGES))
+        for path, modules in _imported_submodules().items()
+        if path.parts[0] == DOMAIN_PACKAGE and modules & set(SHELL_PACKAGES)
+    }
+    assert offenders == {}, f"domain modules importing a shell package: {offenders}"
+
+
+def test_the_ui_does_not_import_the_service():
+    """The dependency runs one way here too: the service renders the overlay.
+
+    `socratic.ui` is a pure function over the wire body the service builds. A
+    UI module reaching back for `ServiceDependencies` or a route would make the
+    overlay untestable without standing a server up, which is the whole reason
+    it takes a mapping and returns a string.
+    """
+    offenders = {
         str(path): sorted(modules)
         for path, modules in _imported_submodules().items()
-        if path.parts[0] == DOMAIN_PACKAGE and SERVICE_PACKAGE in modules
+        if path.parts[0] == UI_PACKAGE and SERVICE_PACKAGE in modules
     }
-    assert offenders == {}, f"domain modules importing the service: {offenders}"
+    assert offenders == {}, f"ui modules importing the service: {offenders}"
 
 
 def _imported_submodules() -> dict[pathlib.Path, set[str]]:

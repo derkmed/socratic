@@ -199,6 +199,15 @@ call. A sibling container to Open WebUI.
 `LearnerId`, calls the quiz service, returns the HTML the service rendered. It
 holds no domain logic and makes no model calls.
 
+**Overlay** — the document the learner plays a quiz in: one self-contained HTML
+page the quiz service renders and the Pipe returns, displayed in Open WebUI's
+sandboxed `srcdoc` iframe. It carries the explanation with its blanks drawn
+inline, one input control per blank chosen by the mode's **render hint**, and the
+capability token. It fetches nothing — no CDN, no font, no stylesheet — and
+renders no model-authored text itself: every fragment in it was sanitised in the
+service before it left. A `direct_answer` gets an overlay too, with the prose and
+no quiz machinery.
+
 **Capability token** — how a request from the iframe is authorized. HMAC-signed,
 scoped to one `QuizSessionId` and its `LearnerId`, short TTL, minted into the
 `srcdoc` at render time. The iframe is sandboxed without `allow-same-origin`, so it

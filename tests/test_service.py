@@ -25,6 +25,7 @@ cadence. What is tested here is exactly what only exists once the routes exist:
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -696,6 +697,112 @@ class TestTheAdvancedTutorLine:
         harness.model.assert_never_called(CallType.GRADE_ANSWER)
 
 
+class TestTheOverlayRoute:
+    """The service serves the document; the Pipe only forwards it.
+
+    ADR-0015: the Pipe "returns the rendered HTML the service produced". It has
+    no other option — it is pasted Python in the Open WebUI container and cannot
+    import `socratic.ui` at all. So the overlay is a route here, authorized by
+    the same service token as `/quizzes`, and the browser-facing URL is this
+    process's configuration rather than a field the caller can choose.
+    """
+
+    def _overlay(self, harness, **overrides):
+        body = {
+            "learner_id": LEARNER,
+            "inquiry": "Why does heat flow?",
+            "mode": DifficultyMode.NOVICE.value,
+        }
+        body.update(overrides)
+        return harness.client.post(
+            "/overlays",
+            json=body,
+            headers={"X-Socratic-Service-Token": SERVICE_TOKEN},
+        )
+
+    def test_it_returns_a_document_declaring_utf8(self, harness):
+        response = self._overlay(harness)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/html")
+        assert "utf-8" in response.headers["content-type"].lower()
+        assert response.text.lstrip().lower().startswith("<!doctype html>")
+
+    def test_the_document_carries_the_quiz_and_a_token_good_for_its_session(
+        self, harness
+    ):
+        document = self._overlay(harness).text
+
+        assert 'data-blank-id="b1"' in document
+        assert "entropy" in document
+
+        session = re.search(r'data-quiz-session-id="([^"]+)"', document).group(1)
+        token = re.search(r'data-capability-token="([^"]+)"', document).group(1)
+        assert harness.minter.verify(token, for_session=session)
+
+    def test_the_browser_facing_url_comes_from_configuration(self, harness):
+        document = self._overlay(harness).text
+
+        assert f'data-service-base-url="{harness.deps.public_base_url}"' in document
+
+    def test_a_caller_cannot_choose_the_url_the_answers_go_to(self, harness):
+        """A URL from the request body would let whoever holds the service
+        token point every learner's answers at another origin."""
+        response = self._overlay(harness, service_base_url="http://evil.example")
+
+        assert response.status_code == 422
+
+    def test_without_the_service_token_it_is_refused_before_any_model_call(
+        self, harness
+    ):
+        response = harness.client.post(
+            "/overlays",
+            json={"learner_id": LEARNER, "inquiry": "why?", "mode": "novice"},
+        )
+
+        assert response.status_code == 401
+        harness.model.assert_never_called()
+
+    def test_a_capability_token_does_not_authorize_it(self, harness):
+        response = harness.client.post(
+            "/overlays",
+            json={"learner_id": LEARNER, "inquiry": "why?", "mode": "novice"},
+            headers={"X-Socratic-Service-Token": harness.mint_for(OTHER_SESSION)},
+        )
+
+        assert response.status_code == 401
+        harness.model.assert_never_called()
+
+    def test_a_direct_answer_is_prose_with_no_token(self):
+        """The override branch created no session, so there is nothing for a
+        token to be scoped to and nothing to submit (ADR-0004)."""
+        harness = Harness(DIRECT_ANSWER_PAYLOAD)
+
+        document = self._overlay(harness).text
+
+        assert "emergency services" in document
+        assert "data-capability-token" not in document
+        assert "SocraticQuiz" not in document
+
+    def test_the_answer_key_does_not_reach_the_document(self, harness):
+        """The overlay renders downstream of `payloads.quiz_body`, so this is
+        the end-to-end form of the whitelist: the fixture's hints and its
+        reinforcement are in this process and neither may leave it."""
+        document = self._overlay(harness).text
+
+        assert SENTINEL_HINT not in document
+        assert "Entropy is the one that never decreases" not in document
+
+    def test_the_recap_ships_hidden_rather_than_withheld(self, harness):
+        """The recap is pedagogy, not key: the learner reads it once the attempt
+        seals. It travels in the document and starts hidden, so showing it costs
+        no request (CONTEXT: Sealed)."""
+        document = self._overlay(harness).text
+
+        assert '<section class="socratic-recap" hidden>' in document
+        assert "never decreases in an isolated system" in document
+
+
 # --- Configuration -----------------------------------------------------------
 
 
@@ -736,6 +843,34 @@ class TestServiceConfig:
 
         with pytest.raises(ConfigError):
             ServiceConfig.from_env(env)
+
+    def test_the_public_url_defaults_to_the_published_compose_port(self):
+        """The overlay needs the service's *browser-facing* origin, which is
+        not the compose DNS name the Pipe uses. `compose.yaml` publishes 8080
+        to the host, so that is the default."""
+        from socratic.service.config import ServiceConfig
+
+        config = ServiceConfig.from_env(dict(self.ENV))
+
+        assert config.public_base_url == "http://localhost:8080"
+
+    def test_the_public_url_is_read_from_the_environment(self):
+        from socratic.service.config import ServiceConfig
+
+        config = ServiceConfig.from_env(
+            {**self.ENV, "SOCRATIC_PUBLIC_URL": "https://quiz.example:9443/"}
+        )
+
+        assert config.public_base_url == "https://quiz.example:9443"
+
+    def test_a_relative_public_url_is_refused_at_startup(self):
+        """A `srcdoc` document inherits its parent's base URL, so a relative
+        one would send every answer to Open WebUI instead of here — a failure
+        that shows up as a network error in a demo, not as a bad config."""
+        from socratic.service.config import ConfigError, ServiceConfig
+
+        with pytest.raises(ConfigError):
+            ServiceConfig.from_env({**self.ENV, "SOCRATIC_PUBLIC_URL": "/quiz"})
 
     def test_the_secret_is_never_rendered(self):
         """A traceback or a debug log must not be how the secret escapes."""

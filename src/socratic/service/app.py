@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from socratic.domain import rating as rating_module
 from socratic.domain import types
@@ -22,6 +22,7 @@ from socratic.domain.records import QuizAttempt
 from socratic.domain.tokens import Claims
 from socratic.service import payloads, security
 from socratic.service.deps import ServiceDependencies
+from socratic.ui import overlay
 
 TOKEN_HEADER = "X-Socratic-Token"
 SERVICE_TOKEN_HEADER = "X-Socratic-Service-Token"
@@ -63,13 +64,14 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             )
         return claims, attempt
 
-    @app.post("/quizzes")
-    def author_quiz(
-        body: payloads.AuthorRequest,
-        presented: str | None = Depends(security.service_header),
-    ) -> JSONResponse:
-        security.require_service_token(deps, presented)
+    def _authored(body: payloads.AuthorRequest) -> dict[str, Any]:
+        """Author, mint if there is a session, and shape the wire body.
 
+        Shared by `/quizzes` and `/overlays` so neither grows a second copy of
+        the authoring translation — and so the overlay is rendered from exactly
+        the body the JSON route returns, which is what keeps the answer key's
+        whitelist the only thing standing between the key and the browser.
+        """
         result = deps.authoring.author(
             body.inquiry,
             body.learner_id,
@@ -78,13 +80,52 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         )
 
         if isinstance(result, types.DirectAnswer):
-            return _json(payloads.direct_answer_body(result))
+            return payloads.direct_answer_body(result)
 
         token = deps.minter.mint(result.quiz_session_id, body.learner_id)
-        return _json(
-            payloads.quiz_body(
-                result, registry=deps.registry, capability_token=token
+        return payloads.quiz_body(
+            result, registry=deps.registry, capability_token=token
+        )
+
+    @app.post("/quizzes")
+    def author_quiz(
+        body: payloads.AuthorRequest,
+        presented: str | None = Depends(security.service_header),
+    ) -> JSONResponse:
+        security.require_service_token(deps, presented)
+
+        return _json(_authored(body))
+
+    @app.post("/overlays")
+    def author_overlay(
+        body: payloads.AuthorRequest,
+        presented: str | None = Depends(security.service_header),
+    ) -> HTMLResponse:
+        """The overlay document, for the Pipe to return unchanged (#13, §11).
+
+        The Pipe cannot render this itself — it is pasted Python in the Open
+        WebUI container and cannot import `socratic.ui` — so ADR-0015's "the
+        Pipe returns the rendered HTML the service produced" has to mean a route
+        here. Same credential as `/quizzes`, because it is the same call with a
+        different representation: it is the Pipe asking, server to server,
+        before any session exists for a capability token to be scoped to.
+        """
+        security.require_service_token(deps, presented)
+
+        authored = _authored(body)
+        if authored["kind"] == "quiz":
+            document = overlay.render_overlay(
+                authored, service_base_url=deps.public_base_url
             )
+        else:
+            document = overlay.render_direct_answer(authored)
+
+        return HTMLResponse(
+            content=document,
+            media_type="text/html; charset=utf-8",
+            # The learner's browser renders this inside a `srcdoc` iframe; it is
+            # never a file to save (master spec §12).
+            headers={"Content-Disposition": "inline"},
         )
 
     @app.post("/answers")

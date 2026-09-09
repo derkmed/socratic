@@ -13,6 +13,7 @@ from socratic.domain.authoring import QuizAuthoring
 from socratic.domain.registry import ModeRegistry, default_registry
 from socratic.domain.session import QuizSession
 from socratic.domain.tokens import TokenMinter
+from socratic.service.config import DEFAULT_PUBLIC_URL
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,10 @@ class ServiceDependencies:
     service_token: str
     registry: ModeRegistry = None  # type: ignore[assignment]
     clock: ids.Clock = ids.system_clock
+    public_base_url: str = DEFAULT_PUBLIC_URL
+    """The service's browser-facing origin, rendered into the overlay (#13).
+
+    Configuration, never a request field. The overlay is the only consumer."""
 
     def __post_init__(self) -> None:
         if self.registry is None:

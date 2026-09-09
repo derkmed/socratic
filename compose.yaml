@@ -18,6 +18,12 @@ services:
       SOCRATIC_TOKEN_SECRET: ${SOCRATIC_TOKEN_SECRET:?set a secret of >=32 bytes}
       SOCRATIC_SERVICE_TOKEN: ${SOCRATIC_SERVICE_TOKEN:?set the Pipe's service token}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?authoring makes a live model call}
+      # Where the *learner's browser* reaches this service, rendered into the
+      # overlay so its `fetch` has an absolute URL to use (#13). A `srcdoc`
+      # document inherits its parent's base URL, so a relative path would send
+      # every answer to Open WebUI instead. Not the compose DNS name below:
+      # that one is only reachable from inside the network.
+      SOCRATIC_PUBLIC_URL: ${SOCRATIC_PUBLIC_URL:-http://localhost:8080}
     ports:
       # Published to the host because the iframe fetches it from the learner's
       # browser, not from inside the compose network.
