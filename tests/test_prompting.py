@@ -457,6 +457,17 @@ class TestTheProfileInternalsScanItself:
             "self._profiles[profile.learner_id] = profile\n",
         ) == []
 
+    def test_the_builder_s_bookkeeping_is_not_an_internal(self):
+        # The unified profile (#36) also carries `watermark` and `updated_at`.
+        # Neither is shape-bearing for rendering — the watermark says how far
+        # `ProfileBuilder` has read, and #16 has to read it to advance it.
+        # Forbidding that would repeat #30: a guard that stops the profile
+        # being used for the thing it exists for.
+        for field in ("watermark", "updated_at"):
+            assert _scan_snippet(
+                "domain/builder.py", f"since = profile.{field}\n"
+            ) == []
+
     def test_the_owning_module_may_read_them(self):
         for field in PROFILE_INTERNALS:
             assert _scan_snippet("domain/prompting.py", f"x = profile.{field}\n") == []
