@@ -6,13 +6,26 @@ in `QuizSession` and `QuizAuthoring`, which is what makes this layer safe to
 leave untested as a unit and what the ticket means by "the HTTP API is
 deliberately not a seam".
 
+The one thing a handler does beyond that is *schedule*: an authoring route
+queues ADR-0011's pedagogy call as a background task, so the second call is
+made after the response and blocks nothing. Which routes fire it, which do not,
+and what a failed one leaves behind are properties of this layer alone (#118).
+
 Two properties are *only* true here, so they are asserted in `test_service.py`:
 authorization runs before any work, and the response carries a rotated token.
 """
 
+import logging
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -30,6 +43,14 @@ from socratic.ui import overlay
 
 TOKEN_HEADER = "X-Socratic-Token"
 SERVICE_TOKEN_HEADER = "X-Socratic-Service-Token"
+
+_log = logging.getLogger(__name__)
+"""The one thing this layer says out loud.
+
+A pedagogy call fires after the response has been sent, so its failure has no
+route to report through and no learner waiting on it. Logging is the whole
+report — and #118 is what silence costs: an unfired second call was reported
+as "hint generation is slow", because nothing anywhere said otherwise."""
 
 
 def create_app(deps: ServiceDependencies) -> FastAPI:
@@ -80,7 +101,37 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         recorded = deps.settings.get(learner_id)
         return None if recorded is None else recorded.probe_cadence
 
-    def _authored(body: payloads.AuthorRequest) -> dict[str, Any]:
+    def _fire_pedagogy(
+        quiz: types.Quiz, learner_id: str, probe_cadence: ProbeCadence
+    ) -> None:
+        """The second authoring call, run after the response is sent (#118).
+
+        Every failure is caught. The learner already has their quiz — the whole
+        point of ADR-0011's split is that the skeleton is playable on its own —
+        and there is no longer a response to fail into, so an exception here
+        would only surface as a stack trace attached to a request that already
+        succeeded. `author_pedagogy` writes nothing when it raises, so what is
+        lost is the payload and nothing else.
+
+        Caught and *logged*: a silently dropped payload is exactly the failure
+        #118 describes, and it went unnoticed for as long as it did because it
+        was invisible.
+        """
+        try:
+            deps.authoring.author_pedagogy(
+                quiz, learner_id, probe_cadence=probe_cadence
+            )
+        except Exception:  # Deliberately everything - see the docstring.
+            _log.warning(
+                "the pedagogy payload for session %s was dropped; the learner "
+                "keeps the playable skeleton",
+                quiz.quiz_session_id,
+                exc_info=True,
+            )
+
+    def _authored(
+        body: payloads.AuthorRequest, background: BackgroundTasks
+    ) -> dict[str, Any]:
         """Take the inquiry in, and shape whatever became of it.
 
         Shared by `/quizzes` and `/overlays` so neither grows a second copy of
@@ -109,16 +160,39 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             probe_cadence=settings.probe_cadence,
         )
         if isinstance(intake, inquiry_module.Queued):
+            # No quiz was authored, so there is no second call to make: the
+            # attempt the learner already has was given its payload when it
+            # was authored.
             return payloads.queued_body(intake)
-        return _started(intake.result, body.learner_id)
+        return _started(
+            intake.result,
+            body.learner_id,
+            background,
+            probe_cadence=settings.probe_cadence,
+        )
 
     def _started(
-        result: types.AuthoringResult, learner_id: str
+        result: types.AuthoringResult,
+        learner_id: str,
+        background: BackgroundTasks,
+        *,
+        probe_cadence: ProbeCadence,
     ) -> dict[str, Any]:
         """An authored result as its wire body, with a token if it has a
-        session to scope one to."""
+        session to scope one to.
+
+        Also where ADR-0011's second authoring call is fired, because this is
+        the one place a `Quiz` becomes a body — reached by `/quizzes`,
+        `/overlays` and `/displacements` alike, and already branching on the
+        `DirectAnswer` that must fire nothing. It is queued as a background
+        task rather than called here, so the skeleton stays the only blocking
+        call and the payload lands while the learner reads (#118).
+        """
         if isinstance(result, types.DirectAnswer):
+            # No quiz, no session, nothing to author pedagogy for.
             return payloads.direct_answer_body(result)
+
+        background.add_task(_fire_pedagogy, result, learner_id, probe_cadence)
 
         token = deps.minter.mint(result.quiz_session_id, learner_id)
         return payloads.quiz_body(
@@ -128,15 +202,17 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
     @app.post("/quizzes")
     def author_quiz(
         body: payloads.AuthorRequest,
+        background: BackgroundTasks,
         presented: str | None = Depends(security.service_header),
     ) -> JSONResponse:
         security.require_service_token(deps, presented)
 
-        return _json(_authored(body))
+        return _json(_authored(body, background))
 
     @app.post("/overlays")
     def author_overlay(
         body: payloads.AuthorRequest,
+        background: BackgroundTasks,
         presented: str | None = Depends(security.service_header),
     ) -> HTMLResponse:
         """The overlay document, for the Pipe to return unchanged (#13, §11).
@@ -150,7 +226,7 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         """
         security.require_service_token(deps, presented)
 
-        authored = _authored(body)
+        authored = _authored(body, background)
         # Three branches, one per `kind` the authoring body can carry. Named
         # exhaustively rather than as an if/else pair, so a fourth kind fails
         # here and loudly: the previous `else` sent anything that was not a
@@ -176,6 +252,7 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
     @app.post("/displacements")
     def displace_quiz(
         body: payloads.DisplaceRequest,
+        background: BackgroundTasks,
         token: str | None = Depends(security.capability_header),
     ) -> JSONResponse:
         """"Start this instead": abandon the open quiz, author this one.
@@ -214,7 +291,12 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
 
         return _json(
             payloads.displaced_body(
-                _started(started.result, claims.learner),
+                _started(
+                    started.result,
+                    claims.learner,
+                    background,
+                    probe_cadence=settings.probe_cadence,
+                ),
                 displaced_session_id=(
                     started.displaced.session_id if started.displaced else None
                 ),

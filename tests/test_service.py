@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import re
 
 import pytest
@@ -961,9 +962,10 @@ def land_probe_questions(harness, session: str) -> None:
     A probe question arrives with the *pedagogy* payload (ADR-0011) and a blank
     without one is never probed, so a cadence test needs one there. It is
     written straight onto the stored attempt rather than fetched through
-    `author_pedagogy`, because that call is unreachable for an
-    HTTP-authored quiz today — it renders `quiz.mode.value`, and a mode that
-    arrived over the wire is the plain string `ModeKey` says it is (#89).
+    `author_pedagogy` — which the routes do fire now (#118) — because these
+    tests are about the cadence and not about the second authoring call, and
+    queueing a payload for one would put a model call between the request and
+    the thing being asserted.
     """
     attempt = harness.attempts.get_by_session(LEARNER, session)
     quiz = attempt.quiz
@@ -1228,8 +1230,10 @@ class TestAQuizAuthoredOverHttp:
         assert attempt.mode is DifficultyMode.NOVICE
 
     def test_the_pedagogy_call_lands_on_it(self):
-        # The issue's own reproduction: author through `/quizzes`, then fire
-        # the second authoring call off the render path, as the Pipe does.
+        # #89's own reproduction: author through `/quizzes`, then call
+        # `author_pedagogy` directly on the stored quiz. The route fires it
+        # too now (#118); calling it by hand is what keeps this a test of the
+        # mode key surviving the wire rather than of the wiring.
         harness = Harness(
             also={
                 CallType.AUTHOR_PEDAGOGY: [
@@ -1283,6 +1287,240 @@ class TestAQuizAuthoredOverHttp:
         blank = types.Blank(blank_id="b1", mode="expert", rubric="Name it.")
 
         assert payloads.blank_body(blank, registry)["mode"] == "expert"
+
+
+# --- The pedagogy call is fired by the service (#118) -------------------------
+#
+# `docs/specs/fire-the-pedagogy-call.md`. `author_pedagogy` was implemented,
+# tested and never called from `src/` or `pipe/`, so every quiz a learner ever
+# played had empty hint rungs - rung three included, the one that reveals - no
+# reinforcements, no probe questions and `recap_html == ""`. What only exists
+# once the routes exist is the *firing*: which routes do it, which do not, and
+# that a failed second call still leaves a playable quiz behind.
+
+
+def skeleton_only_blank_payload(blank_id: str = "b1") -> dict:
+    """A true skeleton blank: options and a key, and no pedagogy at all.
+
+    The Novice skeleton rules ask for two options and a `correct_option_id`
+    among them and nothing else, so this is what the first call is entitled to
+    return - and it makes every pedagogy field an assertion about the merge
+    rather than about the fixture.
+    """
+    return {
+        "blank_id": blank_id,
+        "options": [
+            {"option_id": CORRECT_OPTION_ID, "text": "entropy"},
+            {"option_id": "o2", "text": "enthalpy"},
+        ],
+        "correct_option_id": CORRECT_OPTION_ID,
+        "reinforcement": None,
+        "hints": None,
+        "rubric": None,
+    }
+
+
+def skeleton_only_payload(blank_ids: tuple[str, ...] = ("b1",)) -> dict:
+    payload = quiz_payload(
+        blank_builder=skeleton_only_blank_payload, blank_ids=blank_ids
+    )
+    payload["recap"] = ""
+    return payload
+
+
+def with_pedagogy(*, payloads_=None, blank_ids: tuple[str, ...] = ("b1",)) -> Harness:
+    """A harness with a pedagogy payload waiting for the second call."""
+    return Harness(
+        payloads_=payloads_ if payloads_ is not None else [skeleton_only_payload()],
+        also={
+            CallType.AUTHOR_PEDAGOGY: [
+                canned(pedagogy_payload(blank_ids), "msg_02PEDAGOGY")
+            ]
+        },
+    )
+
+
+def overlay_of(harness, **overrides):
+    body = {
+        "learner_id": LEARNER,
+        "inquiry": "Why does heat flow?",
+        "mode": DifficultyMode.NOVICE.value,
+    }
+    body.update(overrides)
+    return harness.client.post(
+        "/overlays", json=body, headers={"X-Socratic-Service-Token": SERVICE_TOKEN}
+    )
+
+
+class TestTheQuizRouteFiresThePedagogyCall:
+    def test_it_makes_exactly_one_pedagogy_call(self):
+        harness = with_pedagogy()
+
+        harness.author()
+
+        assert harness.model.call_count(CallType.AUTHOR_SKELETON) == 1
+        assert harness.model.call_count(CallType.AUTHOR_PEDAGOGY) == 1
+
+    def test_the_skeleton_call_is_made_first(self):
+        """The payload is fetched *after* the body the learner reads is built
+        (ADR-0011: the skeleton is the only blocking call)."""
+        harness = with_pedagogy()
+
+        harness.author()
+
+        assert [call.call_type for call in harness.model.calls] == [
+            CallType.AUTHOR_SKELETON,
+            CallType.AUTHOR_PEDAGOGY,
+        ]
+
+    def test_the_stored_quiz_gains_hints_a_reinforcement_a_probe_and_a_recap(self):
+        """The issue's own reproduction, from the HTTP side. Every one of these
+        was empty for every quiz ever played."""
+        harness = with_pedagogy()
+
+        body = harness.author()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        blank = attempt.quiz.blanks[0]
+        assert attempt.quiz.recap == "Entropy never decreases in an isolated system."
+        assert blank.hints == (SENTINEL_HINT, "second hint", "third hint")
+        assert blank.reinforcement == "Entropy is the one that never decreases."
+        assert blank.probe_question == "How did you arrive at that?"
+
+    def test_both_calls_are_stamped_on_the_attempt(self):
+        harness = with_pedagogy()
+
+        body = harness.author()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert [call.call_type for call in attempt.model_calls] == [
+            "author_skeleton",
+            "author_pedagogy",
+        ]
+
+    def test_the_response_still_carries_no_hint_text(self):
+        """The fire changes nothing about what crosses the wire: the ladder is
+        merged into the stored quiz and stays in this process (D3, ADR-0003).
+        `TestTheAnswerKeyStaysHere` holds the key's half of that."""
+        harness = with_pedagogy()
+
+        rendered = json.dumps(harness.author())
+
+        assert SENTINEL_HINT not in rendered
+        assert "correct_option_id" not in rendered
+
+
+class TestTheOverlayRouteFiresItToo:
+    """The Pipe's route, and therefore the one a real learner actually goes
+    through (ADR-0015)."""
+
+    def test_it_fires_the_pedagogy_call(self):
+        harness = with_pedagogy()
+
+        response = overlay_of(harness)
+
+        assert response.status_code == 200, response.text
+        assert harness.model.call_count(CallType.AUTHOR_PEDAGOGY) == 1
+
+    def test_the_document_is_rendered_from_the_skeleton(self):
+        """The overlay must not wait on the payload - it is rendered from the
+        body the JSON route returns, which is the skeleton."""
+        harness = with_pedagogy()
+
+        document = overlay_of(harness).text
+
+        assert SENTINEL_HINT not in document
+        assert "the second law of thermodynamics" in document
+
+
+class TestDisplacementFiresItForTheNewQuiz:
+    """Start-this-instead authors a quiz by the same call and hands it to the
+    same learner. A restart that came back without hints is #118 again by a
+    different door."""
+
+    def test_the_restarted_quiz_gets_its_payload(self):
+        harness = with_pedagogy(
+            payloads_=[skeleton_only_payload(), skeleton_only_payload()]
+        )
+        first = harness.author()
+
+        response = harness.client.post(
+            "/displacements",
+            json={
+                "quiz_session_id": first["quiz_session_id"],
+                "inquiry": SECOND_INQUIRY,
+            },
+            headers={"X-Socratic-Token": first["capability_token"]},
+        )
+
+        assert response.status_code == 200, response.text
+        restarted = harness.attempts.get_by_session(
+            LEARNER, response.json()["quiz_session_id"]
+        )
+        assert restarted.quiz.blanks[0].hints == (
+            SENTINEL_HINT,
+            "second hint",
+            "third hint",
+        )
+
+
+class TestTheBranchesThatFireNothing:
+    def test_a_direct_answer_fires_no_pedagogy_call(self):
+        """There is no quiz and no session, so there is nothing to author
+        pedagogy for (`skeleton-and-pedagogy-split.md`, acceptance 7)."""
+        harness = Harness(DIRECT_ANSWER_PAYLOAD)
+
+        body = harness.author(inquiry="I have chest pain, what is happening?")
+
+        assert body["kind"] == "direct_answer"
+        harness.model.assert_never_called(CallType.AUTHOR_PEDAGOGY)
+
+    def test_a_queued_inquiry_fires_no_pedagogy_call(self):
+        """The learner already has a quiz, and the attempt they have was given
+        its payload when it was authored."""
+        harness = with_pedagogy(
+            payloads_=[skeleton_only_payload(), skeleton_only_payload()]
+        )
+        harness.author()
+
+        second = harness.author(inquiry=SECOND_INQUIRY)
+
+        assert second["kind"] == "queued"
+        assert harness.model.call_count(CallType.AUTHOR_PEDAGOGY) == 1
+
+
+class TestAFailedPedagogyCall:
+    """The response has already been sent, so nothing the second call does may
+    reach the learner. The stub serves `{}` for a call type nothing was queued
+    for, which `_merge_pedagogy` refuses for want of a recap - a malformed
+    payload, arriving the way a real one would."""
+
+    def test_the_learner_still_gets_a_playable_quiz(self):
+        harness = Harness(skeleton_only_payload())
+
+        body = harness.author()
+
+        assert body["kind"] == "quiz"
+        assert body["blanks"][0]["options"]
+
+    def test_nothing_is_written_to_the_attempt(self):
+        harness = Harness(skeleton_only_payload())
+
+        body = harness.author()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert [call.call_type for call in attempt.model_calls] == ["author_skeleton"]
+        assert attempt.quiz.blanks[0].hints is None
+
+    def test_it_is_logged_rather_than_swallowed_in_silence(self, caplog):
+        """The symptom was reported as "hint generation is slow". It was not
+        slow; nothing said anything. A dropped payload has to be audible."""
+        harness = Harness(skeleton_only_payload())
+
+        with caplog.at_level(logging.WARNING, logger="socratic.service.app"):
+            body = harness.author()
+
+        assert body["quiz_session_id"] in caplog.text
 
 
 # --- An unregistered mode (#101) ---------------------------------------------
