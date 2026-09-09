@@ -37,15 +37,12 @@ body {
   margin: 0 0 0.75rem;
 }
 
-/* The explanation arrives as a run of block paragraphs with the blank
- * placeholders between them — `render_markdown` wraps every text segment in a
- * `<p>`. Left alone, each blank would read as a paragraph break rather than as
- * a gap in a sentence, so the direct children flow inline. Fenced code and
- * lists are `<pre>` and `<ul>` and keep their own block layout. */
-.socratic-explanation > p {
-  display: inline;
-  margin: 0;
-}
+/* No rule flattens the explanation's paragraphs. `markdown.render_fragment`
+ * renders a text segment that is a clause with no `<p>` at all (#86), so a
+ * blank sits in the line rather than between two blocks, and the paragraphs
+ * that do reach here are ones an author actually wrote — including a real
+ * break inside one text segment, which the rule that used to live here
+ * flattened along with the artificial ones. */
 
 .socratic-blank {
   display: inline-block;
