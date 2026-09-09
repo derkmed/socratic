@@ -87,6 +87,80 @@ simply not applied, and the service behaves exactly as it does today. It matches
 the additive, reversible nature of a write-only trail, and spares every existing
 test a temporary directory it does not care about.
 
+**One JSON file per record, in a tree that mirrors the partition.**
+`data/attempts/<learner_id>/<attempt_id>.json`, with `learner_id`
+percent-encoded so an id containing `/` or `..` cannot escape the directory. An
+append-only JSONL log would suit ADR-0006's scan better, but the tree makes
+ADR-0005's partition visible to a human opening the directory — which is the
+demonstration #117 actually asks for — and a temp-file-plus-rename within the
+target directory is genuinely atomic where an append is only nearly so.
+
+**`SOCRATIC_DATA_DIR` is read by `ServiceConfig.from_env`**, as an optional
+`data_dir`, rather than by `build_app` where the repositories are constructed.
+One place answers "what does this service read from the environment", and the
+startup check below is the same shape of validation `from_env` already does for
+the other four variables.
+
+**An unwritable directory refuses the boot.** A runtime write failure is
+swallowed (above) because it lands on a learner's request; a startup failure has
+no learner to protect and every realistic misconfiguration — a path that is a
+file, a directory that is not writable — surfaces there. Setting the variable is
+a deliberate statement that the records are wanted, so silently not collecting
+them is precisely the failure #117 exists to prevent. Unset remains the way to
+opt out.
+
+**The write is synchronous on the request that seals the quiz.** ADR-0011 makes
+latency a primary concern, but a few KB to local disk is noise against the model
+call in the same request, and a background write would make "was it written?"
+untestable without synchronisation and losable to an at-exit race.
+
+**Visibility is a README section, not a tool.** The bind mount already puts the
+files under the reader's cursor in `./data/`; a `dump` command would be the read
+path this ADR declines, wearing a different hat.
+
+**Each file is a self-describing envelope**, `{"schema_version", "kind",
+"written_at", "record"}`, rather than the bare `asdict`. `QuizAttempt` carries
+`schema_version` as a field and `RatingRecord` does not, so a bare walk yields a
+versioned attempt beside an unversioned rating; the whole value of a version
+nobody reads is that an offline reader finds it in one uniform place. The
+duplication inside the attempt record is harmless.
+
+**Ratings partition like attempts**, at `data/ratings/<learner_id>/<attempt_id>.json`,
+even though `RatingRepository.get` takes no partition key. The flat lookup is a
+prototype convenience; the trail should show the shape ADR-0005's document store
+will enforce.
+
+**`compose.yaml` turns collection on by default**, mounting `./data` and setting
+`SOCRATIC_DATA_DIR`. A demonstration of data collection that collects nothing
+until a second variable is set demonstrates the opposite, and the gitignored
+directory makes the default free.
+
+**Tests assert on the JSON structurally — no decoder, not even in tests.** A
+round-trip test would prove fidelity best, but a test-only decoder is the read
+path this ADR declines, and it is precisely what someone promotes to production
+the day durability is wanted, in place of the document store ADR-0005 names. A
+field-coverage assertion catches the silently-omitted-field failure mode without
+building one.
+
+**The wrapper delegates first, then writes.** The delegate is the authority on
+whether the write is legal at all — `InMemoryAttemptRepository.save` refuses a
+second write to a closed attempt — so writing first would leave a file on disk
+for a write the store rejected. The reverse cost, memory and disk disagreeing
+when the file write fails, is already priced in by logging rather than raising.
+
+**Flush cadence is a knob, held by the service, not by the caller.** Writing
+only on close is a weak demonstration of collection — nothing appears until a
+quiz seals — so the batching above can be overridden to write on every `save()`,
+every guess and every probe. It is an install-wide admin setting in the same
+class as `SOCRATIC_MODE`: env-defaulted, no restart-free UI. It is deliberately
+*not* a Pipe `Valves` field beside `mode`, and not a per-learner setting. Mode
+shapes a quiz; an audit trail a caller can reshape per-request, or a learner can
+opt out of, is not an audit trail — the line `compose.yaml` already draws for
+`SOCRATIC_PUBLIC_URL`, held by the service and never accepted from a caller. The
+Pipe holds no domain logic and no disk, so it does not decide how the disk is
+written. Default stays on-close; the override exists for demonstration and for
+`SOCRATIC_DATA_DIR`'s own justification.
+
 ## Consequences
 
 Good:
@@ -102,3 +176,5 @@ Costs / risks:
 - `schema_version` is written and read by nobody, so drift is only detectable
   offline.
 - Answer keys sit in the working tree, protected by `.gitignore` alone.
+- The flush override reinstates the ~120-writes-per-attempt cost ADR-0005 names,
+  which is why it is off by default and not reachable from a learner.
