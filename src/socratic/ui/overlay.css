@@ -7,6 +7,31 @@
  * this. The font stack is whatever the learner's machine already has.
  */
 
+/* The palette, named once. Taken from `docs/architecture.html` so the two
+ * surfaces the project shows a reader look like one project.
+ *
+ * Light only, deliberately. The explanation is a page of prose and code the
+ * learner has to *read*; a dark repaint of it would fight the highlight
+ * colours `markdown.highlight_css()` inlines beside this, which are chosen for
+ * a light ground. `--surface` is where the prose sits and is kept white.
+ */
+:root {
+  --ground: #f1f2ed;
+  --surface: #fafbf7;
+  --ink: #14231f;
+  --muted: #57635c;
+  --rule: #c6cdc2;
+  --accent: #14605a;
+  --key: #a0660f;
+  --rose: #93353e;
+  /* Verdict grounds: the accent and the rose at a tint that keeps body text
+   * at its full contrast against them. */
+  --accent-wash: #eaf2f0;
+  --rose-wash: #f9edee;
+  /* The blank the learner is answering right now. */
+  --key-wash: #fbf0da;
+}
+
 /* `hidden` outranks every rule below it. Each panel ships present and hidden so
  * the client toggles visibility and never builds markup from model-authored
  * data; a `display:` rule that beat the attribute would show all of them at
@@ -19,8 +44,8 @@ body {
   margin: 0;
   padding: 0.75rem;
   font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  color: #14213d;
-  background: #fdfdfb;
+  color: var(--ink);
+  background: var(--surface);
 }
 
 .socratic-overlay {
@@ -33,7 +58,7 @@ body {
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: lowercase;
-  color: #5a6478;
+  color: var(--muted);
   margin: 0 0 0.5rem;
 }
 
@@ -47,17 +72,17 @@ body {
 .socratic-blank {
   display: inline-block;
   min-width: 3.5rem;
-  border-bottom: 2px solid #c0392b;
+  border-bottom: 2px solid var(--rose);
   vertical-align: baseline;
 }
 
 .socratic-blank[data-state="active"] {
-  background: #fff3cd;
+  background: var(--key-wash);
 }
 
 .socratic-blank[data-state="resolved"] {
-  border-bottom-color: #2e7d32;
-  color: #2e7d32;
+  border-bottom-color: var(--accent);
+  color: var(--accent);
   min-width: 0;
 }
 
@@ -67,7 +92,7 @@ body {
 .socratic-recap {
   margin-top: 0.85rem;
   padding: 0.6rem 0.75rem;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--rule);
   border-radius: 0.5rem;
   background: #ffffff;
 }
@@ -86,9 +111,10 @@ body {
   font: inherit;
   padding: 0.3rem 0.7rem;
   margin: 0.15rem 0.25rem 0.15rem 0;
-  border: 1px solid #14213d;
+  border: 1px solid var(--rule);
   border-radius: 0.35rem;
-  background: #f4f6fb;
+  background: var(--ground);
+  color: var(--ink);
   cursor: pointer;
 }
 
@@ -107,26 +133,26 @@ body {
   font: inherit;
   padding: 0.3rem 0.45rem;
   min-width: 14rem;
-  border: 1px solid #8a93a6;
+  border: 1px solid var(--rule);
   border-radius: 0.35rem;
 }
 
 .socratic-verdict {
   margin-top: 0.75rem;
   padding: 0.6rem 0.75rem;
-  border-left: 3px solid #8a93a6;
-  background: #f7f9fc;
+  border-left: 3px solid var(--rule);
+  background: var(--ground);
 }
 
 .socratic-verdict[data-verdict="correct"] {
-  border-left-color: #2e7d32;
-  background: #eef7ee;
+  border-left-color: var(--accent);
+  background: var(--accent-wash);
   animation: socratic-celebrate 600ms ease-out;
 }
 
 .socratic-verdict[data-verdict="incorrect"] {
-  border-left-color: #c0392b;
-  background: #fdf1f0;
+  border-left-color: var(--rose);
+  background: var(--rose-wash);
 }
 
 /* The celebration the verdict starts. It runs on the response that already
@@ -143,12 +169,12 @@ body {
 }
 
 .socratic-pending {
-  color: #7a6a2f;
+  color: var(--key);
   font-style: italic;
 }
 
 .socratic-queued {
   margin-top: 1rem;
-  color: #5a6478;
+  color: var(--muted);
   font-size: 0.85rem;
 }
