@@ -210,7 +210,13 @@ def cases():
 
 
 def object_nodes(schema):
-    """Every object node in a schema, `anyOf` branches included."""
+    """Every object node in a schema, `anyOf` branches included.
+
+    Reads `properties` and `items` defensively. A node missing them is exactly
+    the bug this walker exists to find (#73: a bare `{"type": "object"}`), and
+    it is worth an assertion naming the node rather than a `KeyError` raised
+    mid-walk.
+    """
     if "anyOf" in schema:
         for branch in schema["anyOf"]:
             yield from object_nodes(branch)
@@ -219,10 +225,12 @@ def object_nodes(schema):
     kinds = [kinds] if isinstance(kinds, str) else list(kinds or ())
     if "object" in kinds:
         yield schema
-        for sub in schema["properties"].values():
+        for sub in schema.get("properties", {}).values():
             yield from object_nodes(sub)
     if "array" in kinds:
-        yield from object_nodes(schema["items"])
+        items = schema.get("items")
+        if items is not None:
+            yield from object_nodes(items)
 
 
 def every_schema():
@@ -264,6 +272,27 @@ class TestTheCompositionPoint:
                 assert sorted(node["required"]) == sorted(node["properties"]), (
                     where
                 )
+
+    def test_every_registry_fragment_is_strict(self):
+        # The walk above follows what is *composed* today - `SKELETON` and
+        # `PEDAGOGY`. A fragment the registry declares but nothing sends yet is
+        # a trap that springs on whoever wires it (#73: Advanced's `COMPLETE`
+        # fragment had a bare `{"type": "object"}` under `options`). Going
+        # through `rules_for` rather than the module constants covers the
+        # fallback by construction, and covers a mode that declares its own
+        # rules for a stage just the same.
+        registry = registry_module.default_registry()
+        for mode in registry.modes():
+            policy = registry.policy_for(mode)
+            for stage in AuthoringStage:
+                fragment = policy.rules_for(stage).schema_fragment
+                for node in object_nodes(fragment):
+                    where = f"{mode}/{stage.value}: {node}"
+                    assert node.get("additionalProperties") is False, where
+                    assert "properties" in node, where
+                    assert sorted(node.get("required", ())) == sorted(
+                        node["properties"]
+                    ), where
 
     def test_every_verdict_enum_is_the_verdict_enum(self):
         # `GRADE_PROBE` asked for `sound`/`unsound`, which `Verdict` has never
