@@ -41,6 +41,7 @@ from typing import Any, Mapping
 import anthropic
 
 from socratic.domain import model_client
+from socratic.domain import output_schemas
 from socratic.domain import prompting
 
 MODEL = "claude-opus-5"
@@ -93,49 +94,25 @@ class Valves:
     max_tokens: int = MAX_TOKENS
 
 
-def _schema(*properties: tuple[str, dict[str, Any]]) -> dict[str, Any]:
-    """A strict object schema: every property required, nothing extra.
+DEFAULT_OUTPUT_SCHEMAS: Mapping[prompting.CallType, dict[str, Any]] = (
+    output_schemas.for_mode()
+)
+"""One schema per call type, composed from the registry and the parsers (#66).
 
-    `additionalProperties: false` plus a complete `required` list is how the
-    Messages API spells a strict structured-output format.
-    """
-    return {
-        "type": "object",
-        "properties": dict(properties),
-        "required": [name for name, _ in properties],
-        "additionalProperties": False,
-    }
+Not written here any more. They were provisional shapes from #4, to be replaced
+through the `schemas` argument by the tickets that owned the payloads (#5
+authoring, #8/#9 grading); those tickets landed and none of them did, and by
+then every one of the four disagreed with what the domain actually parses.
+Nothing failed, because every test runs against `RecordingModelClient`, which
+serves canned content and never looks at a schema.
 
-
-DEFAULT_OUTPUT_SCHEMAS: Mapping[prompting.CallType, dict[str, Any]] = {
-    prompting.CallType.AUTHOR_SKELETON: _schema(
-        ("explanation", {"type": "string"}),
-        ("blanks", {"type": "array", "items": {"type": "string"}}),
-    ),
-    prompting.CallType.AUTHOR_PEDAGOGY: _schema(
-        ("hints", {"type": "array", "items": {"type": "string"}}),
-        ("reinforcements", {"type": "array", "items": {"type": "string"}}),
-        ("probe_questions", {"type": "array", "items": {"type": "string"}}),
-    ),
-    prompting.CallType.GRADE_ANSWER: _schema(
-        ("verdict", {"type": "string", "enum": ["correct", "incorrect"]}),
-        ("feedback", {"type": "string"}),
-    ),
-    prompting.CallType.GRADE_PROBE: _schema(
-        ("verdict", {"type": "string", "enum": ["sound", "unsound"]}),
-        ("response", {"type": "string"}),
-    ),
-    prompting.CallType.FOLD_NARRATIVE: _schema(
-        ("narrative", {"type": "string"}),
-    ),
-}
-"""Provisional shapes, one per call type, replaced through the `schemas`
-argument by the tickets that own the payloads (#5 authoring, #8/#9 grading).
-
-They are here rather than absent because a request with no
-`output_config.format` is an unconstrained request, and "every call constrains
-its output" is an acceptance criterion of this ticket. What each call type
-*returns* is not."""
+`output_schemas.for_mode` is the single composition point, and it lives in the
+domain because that is the direction the dependency runs: the domain may not
+import the adapter, and a schema is a statement about what the domain parses -
+this module only carries it to the wire. The default is the mode-agnostic
+composition, which admits every mode the registry holds; a caller that knows
+which mode it is authoring for passes `schemas=output_schemas.for_mode(mode)`
+through the constructor argument that has existed for this since #7."""
 
 
 def _block(segment: prompting.PromptSegment) -> dict[str, Any]:
