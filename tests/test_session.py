@@ -171,10 +171,11 @@ def graded(
     *,
     tutor_line: str | None = None,
     probe_question: str | None = None,
+    hint: str | None = None,
     message_id: str = "msg_grade_1",
     **counters: int,
 ) -> ModelResponse:
-    """One `grade_answer` response: the verdict and the two nullable fields.
+    """One `grade_answer` response: the verdict and the three nullable fields.
 
     Optional fields are *omitted* rather than sent as null when they have no
     value — segment 1 tells the model to omit rather than fill with filler, so
@@ -185,6 +186,8 @@ def graded(
         payload["tutor_line"] = tutor_line
     if probe_question is not None:
         payload["probe_question"] = probe_question
+    if hint is not None:
+        payload["hint"] = hint
     return ModelResponse(
         content=json.dumps(payload), message_id=message_id, **counters
     )
@@ -881,31 +884,120 @@ class TestAdvancedWalksTheSameLadder:
         assert attempts.get(LEARNER, attempt.attempt_id).is_sealed
         assert stub.call_count() == 3, "one call per wrong answer, and no more"
 
-    def test_nothing_is_revealed_on_rung_three(self):
-        # An Advanced blank has no option id to reveal, and its rubric is the
-        # answer key (D4) — so the reveal rung reveals nothing.
+    def test_rung_three_reveals_in_prose_and_carries_no_option_id(self):
+        # ADR-0016. An Advanced blank has no option id to reveal, and its
+        # rubric is the answer key (D4), so the reveal is what the model wrote
+        # for rung three — prose, in `feedback` — and `revealed_option_id`
+        # stays null on every rung. Rewritten from
+        # `test_nothing_is_revealed_on_rung_three`, which locked in the silence
+        # #56 reports rather than endorsing it.
         attempt = attempt_for(advanced_quiz())
-        quiz_session, _ = wire(attempt, model_client=grading_stub(graded("incorrect")))
+        quiz_session, _ = wire(
+            attempt,
+            model_client=grading_stub(
+                graded("incorrect", hint="Think about what is conserved."),
+                graded("incorrect", hint="It is the quantity that never falls."),
+                graded("incorrect", hint="The answer is entropy: it never falls."),
+            ),
+        )
 
         rungs = [
             submit(quiz_session, attempt, "b1", f"try {n}") for n in range(1, 4)
         ]
 
         assert [step.revealed_option_id for step in rungs] == [None, None, None]
+        assert rungs[-1].hint_rung_shown == 3
+        assert rungs[-1].feedback == "The answer is entropy: it never falls."
+        assert rungs[-1].blank_resolved is True, "rung three still closes it"
 
-    def test_an_advanced_blank_has_no_pre_authored_hint_text(self):
-        # The model is told not to write the hint, and the registry forbids an
-        # Advanced blank from carrying one, so `feedback` is empty and the
-        # reactive tutor line is what the learner actually reads.
+    def test_an_advanced_hint_is_authored_on_the_grading_response(self):
+        # #56 / ADR-0016. The rung's text rides the response that carried the
+        # verdict, reaching the learner through `feedback` — the same field the
+        # Novice ladder fills from `blank.hints`. Rewritten from
+        # `test_an_advanced_blank_has_no_pre_authored_hint_text`, which
+        # asserted `feedback is None` on every rung.
         attempt = attempt_for(advanced_quiz())
-        stub = grading_stub(graded("incorrect", tutor_line="Heat is not disorder."))
+        stub = grading_stub(
+            graded(
+                "incorrect",
+                tutor_line="Heat is not disorder.",
+                hint="Ask what the second law puts a floor under.",
+            )
+        )
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        result = submit(quiz_session, attempt, "b1", "heat goes up")
+
+        assert result.feedback == "Ask what the second law puts a floor under."
+        assert result.hint_rung_shown == 1
+        assert result.model_grading is not None
+        assert result.model_grading.hint == (
+            "Ask what the second law puts a floor under."
+        )
+        assert result.model_grading.tutor_line == "Heat is not disorder."
+        assert stub.call_count() == 1, "the hint costs no second call"
+
+    def test_each_rung_carries_the_hint_written_for_that_rung(self):
+        attempt = attempt_for(advanced_quiz())
+        quiz_session, _ = wire(
+            attempt,
+            model_client=grading_stub(
+                graded("incorrect", hint="rung one"),
+                graded("incorrect", hint="rung two"),
+                graded("incorrect", hint="rung three"),
+            ),
+        )
+
+        rungs = [
+            submit(quiz_session, attempt, "b1", f"try {n}") for n in range(1, 4)
+        ]
+
+        assert [step.hint_rung_shown for step in rungs] == [1, 2, 3]
+        assert [step.feedback for step in rungs] == [
+            "rung one",
+            "rung two",
+            "rung three",
+        ]
+
+    def test_a_correct_advanced_answer_carries_no_hint(self):
+        attempt = attempt_for(advanced_quiz())
+        quiz_session, _ = wire(attempt, model_client=grading_stub(graded("correct")))
+
+        result = submit(quiz_session, attempt, "b1", "entropy climbs")
+
+        assert result.hint_rung_shown is None
+        assert result.feedback is None
+
+    def test_the_client_states_the_rung_it_selected_in_the_request(self):
+        # ADR-0016: the client still chooses the rung and passes it in. It is
+        # `min(prior_wrong + 1, 3)`, knowable before the call, which is what
+        # keeps the hint on the one response already in flight.
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(*(graded("incorrect", hint="h") for _ in range(3)))
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        for n in range(1, 4):
+            submit(quiz_session, attempt, "b1", f"try {n}")
+
+        tails = [call.segments.volatile_tail.text for call in stub.calls]
+        assert "Hint rung if wrong: 1 of 3" in tails[0]
+        assert "Hint rung if wrong: 2 of 3" in tails[1]
+        assert "Hint rung if wrong: 3 of 3" in tails[2]
+
+    def test_a_hint_that_reproduces_the_rubric_is_dropped(self):
+        # D4 / ADR-0003 is a structural claim, so it may not rest on the model
+        # obeying an instruction. A hint carrying the rubric verbatim fails
+        # closed to no hint at all (ADR-0016).
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(
+            graded("incorrect", hint=f"The rubric says: {RUBRIC} (b1)")
+        )
         quiz_session, _ = wire(attempt, model_client=stub)
 
         result = submit(quiz_session, attempt, "b1", "heat goes up")
 
         assert result.feedback is None
-        assert result.model_grading is not None
-        assert result.model_grading.tutor_line == "Heat is not disorder."
+        assert RUBRIC not in repr(dataclasses.astuple(result))
 
     def test_a_resolved_advanced_blank_refuses_a_further_submission(self):
         attempt = attempt_for(advanced_quiz())

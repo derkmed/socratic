@@ -34,6 +34,7 @@ pytest.importorskip("fastapi", reason="the service extra is optional")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from socratic.domain.authoring import QuizAuthoring  # noqa: E402
+from socratic.domain.inquiry import InquiryIntake  # noqa: E402
 from socratic.domain.model_client import (  # noqa: E402
     ModelResponse,
     RecordingModelClient,
@@ -236,6 +237,7 @@ CAPABILITY_ROUTES = (
     ("/answers", {"blank_id": "b1", "submitted": CORRECT_OPTION_ID}),
     ("/probes", {"blank_id": "b1", "self_explanation": "because disorder rises"}),
     ("/ratings", {"score": 4}),
+    ("/displacements", {"inquiry": "What is enthalpy?"}),
 )
 
 
@@ -673,6 +675,7 @@ class TestTheAdvancedTutorLine:
                 session_module.ModelGrading(
                     tutor_line="You reached for the macro picture.",
                     probe_question=None,
+                    hint=None,
                 )
             ),
             capability_token="rotated",
@@ -683,12 +686,39 @@ class TestTheAdvancedTutorLine:
     def test_a_model_graded_answer_without_one_carries_null(self):
         body = payloads.submission_body(
             self._submission(
-                session_module.ModelGrading(tutor_line=None, probe_question=None)
+                session_module.ModelGrading(
+                    tutor_line=None, probe_question=None, hint=None
+                )
             ),
             capability_token="rotated",
         )
 
         assert body["tutor_line_html"] is None
+
+    def test_an_advanced_rung_hint_reaches_the_wire_as_feedback_html(self):
+        """#56 / ADR-0016. The rung's text is authored on the grading response
+        and routed to `Submission.feedback`, which is the field the Novice
+        ladder already fills — so it needs no wire field of its own and the
+        overlay needs no change to show it."""
+        submission = dataclasses.replace(
+            self._submission(
+                session_module.ModelGrading(
+                    tutor_line=None,
+                    probe_question=None,
+                    hint="Ask what the second law puts a floor under.",
+                )
+            ),
+            verdict=Verdict.INCORRECT,
+            hint_rung_shown=2,
+            feedback="Ask what the second law puts a floor under.",
+            blank_resolved=False,
+        )
+
+        body = payloads.submission_body(submission, capability_token="rotated")
+
+        assert body["hint_rung_shown"] == 2
+        assert "second law puts a floor under" in body["feedback_html"]
+        assert body["revealed_option_id"] is None
 
     def test_the_deterministic_path_has_no_tutor_line_at_all(self):
         """Not merely null: the deterministic strategy never builds a
@@ -1124,10 +1154,27 @@ class TestTheModeToggleAppliesFromTheNextAuthoringCall:
         assert after.mode == before.mode == DifficultyMode.NOVICE
         assert after.quiz.blanks == before.quiz.blanks
 
-    def test_the_next_authoring_call_is_authored_in_the_new_mode(self, playing):
-        harness, _ = playing
-        set_settings(harness, learner_id=LEARNER, mode=DifficultyMode.ADVANCED.value)
+    def test_the_next_authoring_call_is_authored_in_the_new_mode(self):
+        """The *next* call, which since #92 means the next one that authors.
 
+        The first quiz is finished before the second inquiry is raised, because
+        a learner with one still open has their second question queued rather
+        than authored — `InquiryIntake` decides that, not the mode toggle.
+        """
+        harness = Harness(payloads_=[two_blank_novice_payload(), advanced_payload()])
+        first = harness.author(
+            mode=DifficultyMode.NOVICE.value, probe_cadence=ProbeCadence.OFF.value
+        )
+        token = first["capability_token"]
+        for blank_id in TWO_BLANKS:
+            token = answer(harness, token, first["quiz_session_id"], blank_id)[
+                "capability_token"
+            ]
+        assert harness.attempts.get_by_session(
+            LEARNER, first["quiz_session_id"]
+        ).is_sealed
+
+        set_settings(harness, learner_id=LEARNER, mode=DifficultyMode.ADVANCED.value)
         second = harness.author(mode=DifficultyMode.ADVANCED.value)
 
         attempt = harness.attempts.get_by_session(LEARNER, second["quiz_session_id"])
@@ -1236,6 +1283,301 @@ class TestAQuizAuthoredOverHttp:
         blank = types.Blank(blank_id="b1", mode="expert", rubric="Name it.")
 
         assert payloads.blank_body(blank, registry)["mode"] == "expert"
+
+
+# --- The intake reaches HTTP (#92) -------------------------------------------
+
+
+SECOND_INQUIRY = "What is enthalpy?"
+
+
+def two_quizzes(harness_kwargs=None) -> Harness:
+    """A harness with two authoring responses queued.
+
+    Two, so that a route that wrongly authors a second quiz gets one rather
+    than a `StopIteration` — the test then fails on the behaviour it is about
+    instead of on the stub running dry.
+    """
+    return Harness(
+        payloads_=[quiz_payload(), quiz_payload(blank_ids=("b1",))],
+        **(harness_kwargs or {}),
+    )
+
+
+class TestASecondInquiryMidQuiz:
+    """Issue #92: the door an inquiry arrives at is `InquiryIntake`, not
+    `QuizAuthoring`.
+
+    Reproduced on `origin/main` @ `f1b8a43`: two `/quizzes` calls returned two
+    `quiz_session_id`s, left two `in_flight` attempts in one learner's
+    partition and made two authoring calls.
+    """
+
+    def test_the_second_inquiry_is_queued_rather_than_authored(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        second = harness.author(inquiry=SECOND_INQUIRY)
+
+        assert second["kind"] == "queued"
+        assert harness.model.call_count(CallType.AUTHOR_SKELETON) == 1
+        attempts = harness.attempts.list_for_learner(LEARNER)
+        assert [attempt.session_id for attempt in attempts] == [
+            first["quiz_session_id"]
+        ]
+
+    def test_the_queued_body_names_the_open_quiz_and_the_growing_queue(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        second = harness.author(inquiry=SECOND_INQUIRY)
+
+        assert second["quiz_session_id"] == first["quiz_session_id"]
+        assert second["topic"] == first["topic"]
+        assert second["inquiry"] == SECOND_INQUIRY
+        assert SECOND_INQUIRY in second["queued_topics"]
+        assert "the third law" in second["queued_topics"]
+
+    def test_the_queued_body_mints_no_capability_token(self):
+        """`TokenMinter.mint` retires the session's previous token, so a token
+        minted here would log the learner's open overlay out of its own quiz."""
+        harness = two_quizzes()
+        first = harness.author()
+
+        second = harness.author(inquiry=SECOND_INQUIRY)
+
+        assert "capability_token" not in second
+        assert harness.minter.verify(
+            first["capability_token"], for_session=first["quiz_session_id"]
+        )
+
+    def test_the_open_attempt_is_untouched_apart_from_its_queue(self):
+        harness = two_quizzes()
+        harness.author()
+
+        harness.author(inquiry=SECOND_INQUIRY)
+
+        attempt = harness.attempts.list_for_learner(LEARNER)[0]
+        assert attempt.outcome.value == "in_flight"
+        assert attempt.sealed_at is None
+
+    def test_a_first_inquiry_still_authors(self, harness):
+        body = harness.author()
+
+        assert body["kind"] == "quiz"
+        assert body["capability_token"]
+        assert harness.model.call_count(CallType.AUTHOR_SKELETON) == 1
+
+
+class TestTheOverlayRouteQueuesToo:
+    """The Pipe's route, which returns these bytes verbatim (#92).
+
+    Without a queued branch here the Pipe does not degrade — it 500s on the
+    first second question any learner asks.
+    """
+
+    def _overlay(self, harness, **overrides):
+        body = {
+            "learner_id": LEARNER,
+            "inquiry": "Why does heat flow?",
+            "mode": DifficultyMode.NOVICE.value,
+        }
+        body.update(overrides)
+        return harness.client.post(
+            "/overlays",
+            json=body,
+            headers={"X-Socratic-Service-Token": SERVICE_TOKEN},
+        )
+
+    def test_a_second_inquiry_returns_a_document_rather_than_a_quiz(self):
+        harness = two_quizzes()
+        self._overlay(harness)
+
+        response = self._overlay(harness, inquiry=SECOND_INQUIRY)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/html")
+        assert SECOND_INQUIRY in response.text
+        assert "the second law of thermodynamics" in response.text
+        assert harness.model.call_count(CallType.AUTHOR_SKELETON) == 1
+
+    def test_the_queued_document_carries_no_token_and_no_client(self):
+        harness = two_quizzes()
+        first_document = self._overlay(harness).text
+        first_token = re.search(
+            r'data-capability-token="([^"]+)"', first_document
+        ).group(1)
+
+        queued_document = self._overlay(harness, inquiry=SECOND_INQUIRY).text
+
+        assert "data-capability-token" not in queued_document
+        assert "SocraticQuiz" not in queued_document
+        # And the token the learner's open overlay is holding still works.
+        assert harness.minter.verify(first_token)
+
+
+class TestDisplacement:
+    """"Start this instead", as a route (#92, master acceptance 26).
+
+    Authorized by the capability token for the attempt being displaced, not by
+    the service token: `abandoned` is the one destructive write in the domain,
+    it is a learner's gesture about their own open quiz, and the service token
+    is held install-wide for every learner at once.
+    """
+
+    def _displace(self, harness, token, session, inquiry=SECOND_INQUIRY):
+        return harness.client.post(
+            "/displacements",
+            json={"quiz_session_id": session, "inquiry": inquiry},
+            headers={"X-Socratic-Token": token},
+        )
+
+    def test_it_abandons_the_open_attempt_and_authors_the_new_inquiry(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        response = self._displace(
+            harness, first["capability_token"], first["quiz_session_id"]
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["kind"] == "quiz"
+        assert body["quiz_session_id"] != first["quiz_session_id"]
+        assert body["displaced_session_id"] == first["quiz_session_id"]
+
+        displaced = harness.attempts.get_by_session(
+            LEARNER, first["quiz_session_id"]
+        )
+        assert displaced.outcome.value == "abandoned"
+        assert displaced.sealed_at is None
+
+    def test_the_new_body_carries_a_token_good_for_the_new_session(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        body = self._displace(
+            harness, first["capability_token"], first["quiz_session_id"]
+        ).json()
+
+        assert harness.minter.verify(
+            body["capability_token"], for_session=body["quiz_session_id"]
+        )
+
+    def test_the_remaining_queue_carries_forward_without_the_question_answered(self):
+        """Master acceptance 26. The second question was queued first, so it is
+        on the displaced attempt's queue when it is chosen — and must not
+        remain there once it is the thing being answered."""
+        harness = two_quizzes()
+        first = harness.author()
+        harness.author(inquiry=SECOND_INQUIRY)
+
+        body = self._displace(
+            harness, first["capability_token"], first["quiz_session_id"]
+        ).json()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert SECOND_INQUIRY not in attempt.queued_topics
+        assert "the third law" in attempt.queued_topics
+
+    def test_the_service_token_does_not_authorize_a_displacement(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        response = harness.client.post(
+            "/displacements",
+            json={
+                "quiz_session_id": first["quiz_session_id"],
+                "inquiry": SECOND_INQUIRY,
+            },
+            headers={"X-Socratic-Service-Token": SERVICE_TOKEN},
+        )
+
+        assert response.status_code == 401
+
+    def test_the_displaced_session_stops_accepting_answers(self):
+        harness = two_quizzes()
+        first = harness.author()
+
+        self._displace(harness, first["capability_token"], first["quiz_session_id"])
+
+        response = harness.client.post(
+            "/answers",
+            json={
+                "quiz_session_id": first["quiz_session_id"],
+                "blank_id": "b1",
+                "submitted": CORRECT_OPTION_ID,
+            },
+            headers={"X-Socratic-Token": first["capability_token"]},
+        )
+
+        assert response.status_code == 422
+
+    def test_it_authors_in_the_learners_current_mode(self):
+        """The iframe cannot see `UserValves`, so the mode is read from the
+        settings the Pipe pushed, not from the request."""
+        harness = Harness(payloads_=[two_blank_novice_payload(), advanced_payload()])
+        first = harness.author(mode=DifficultyMode.NOVICE.value)
+        set_settings(harness, learner_id=LEARNER, mode=DifficultyMode.ADVANCED.value)
+
+        body = self._displace(
+            harness, first["capability_token"], first["quiz_session_id"]
+        ).json()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert attempt.mode == DifficultyMode.ADVANCED
+
+    def test_a_direct_answer_displaces_nothing(self):
+        """The domain's rule: nothing was started, so there is no attempt for
+        the queue to carry forward onto and the open quiz stays the
+        learner's."""
+        harness = Harness(payloads_=[quiz_payload(), DIRECT_ANSWER_PAYLOAD])
+        first = harness.author()
+
+        body = self._displace(
+            harness,
+            first["capability_token"],
+            first["quiz_session_id"],
+            inquiry="chest pain",
+        ).json()
+
+        assert body["kind"] == "direct_answer"
+        assert body["displaced_session_id"] is None
+        still_open = harness.attempts.get_by_session(
+            LEARNER, first["quiz_session_id"]
+        )
+        assert still_open.outcome.value == "in_flight"
+
+    def test_it_names_no_learner_and_no_attempt(self):
+        assert set(payloads.DisplaceRequest.model_fields) == {
+            "quiz_session_id",
+            "inquiry",
+        }
+        assert payloads.DisplaceRequest.model_config["extra"] == "forbid"
+
+
+class TestTheIntakeIsWiredWithoutBeingAskedFor:
+    def test_dependencies_build_their_own_intake(self, harness):
+        """`__main__.build_app` names no intake, and does not have to: the
+        record derives one from the authoring and attempts it already holds,
+        exactly as it derives its registry and its settings store."""
+        rebuilt = dataclasses.replace(harness.deps, intake=None)
+
+        assert rebuilt.intake is not None
+        assert isinstance(rebuilt.intake, InquiryIntake)
+
+    def test_the_answer_key_does_not_travel_on_the_queued_branch(self):
+        harness = two_quizzes()
+        harness.author()
+
+        queued = harness.author(inquiry=SECOND_INQUIRY)
+
+        rendered = json.dumps(queued)
+        assert SENTINEL_HINT not in rendered
+        assert CORRECT_OPTION_ID not in rendered
+
+
+# --- An unregistered mode (#101) ---------------------------------------------
 
 
 class TestAnUnregisteredMode:

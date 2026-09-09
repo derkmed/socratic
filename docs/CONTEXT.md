@@ -49,10 +49,27 @@ response it was already sending.
 **Answer key** — the correct answers and pre-authored feedback. Lives in the store,
 inside the backend process. Never serialized into the iframe.
 
-**Hint ladder / rung** — the three escalating responses to a wrong answer. The
-client counts attempts and selects the rung; the model authors the text. On a
-re-opened blank the ladder **resumes where it left off** — a failed probe is
-evidence the learner needed more help, not less.
+**Hint ladder / rung** — the three escalating responses to a wrong answer:
+rung one nudges, rung two narrows, rung three states the answer and closes the
+blank. The client counts attempts and selects the rung; **the model authors the
+text, and when it does so differs by mode.** Novice rungs are pre-authored on
+the blank by the pedagogy call; Advanced rungs are authored *at grading time*,
+as a nullable field on the `grade_answer` response, with the client stating the
+rung it selected in the volatile tail. Both arrive in the same place —
+`Submission.feedback`, `feedback_html` on the wire — so a caller cannot tell
+which route wrote one. On a re-opened blank the ladder **resumes where it left
+off**: a failed probe is evidence the learner needed more help, not less. See
+[ADR-0016](adr/0016-advanced-hint-rides-the-grading-response.md).
+
+**Reveal** — what rung three does. In Novice it is the `correct_option_id`,
+returned as `revealed_option_id`: the one path by which the answer key reaches
+a caller. In Advanced there is no option id, so the reveal is **prose** — the
+model states the answer in its own words as the rung-three hint, and
+`revealed_option_id` stays null. **The rubric is never the reveal**: it is the
+answer key *and* the grading criteria (ADR-0003), so a hint reproducing it is
+dropped before it leaves the backend. Three wrong answers closes an Advanced
+blank exactly as it closes a Novice one; what changed with ADR-0016 is that it
+no longer closes in silence.
 
 **Probe** — the tutor asking *how did you arrive at that?* after a correct answer,
 and the learner's free-text reply. Fires on a coin flip per correct answer plus the
@@ -203,6 +220,10 @@ it and destroy the "this was never called" assertion the seam exists for.
 answer. **Advanced only**, and a nullable field on the grading response, never a
 call of its own. Novice has none: its feedback is wholly pre-authored, so a Novice
 answer costs zero model calls without qualification. Nothing streams.
+
+Distinct from the **hint ladder** rung, which since ADR-0016 rides the same
+response: the line remarks on *how* the learner phrased what they said, the rung
+moves them toward the answer. Either, both or neither may be present.
 
 **LearnerProfile** — two parts. The **ledger** is structured and exactly
 recomputed: topic counts, mode history, weak-area tallies, outcome counts,

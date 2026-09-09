@@ -48,6 +48,7 @@ from typing import Mapping, Sequence
 
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.profiles import LearnerProfile
+from socratic.domain.records import HINT_LADDER_RUNGS
 from socratic.domain.registry import BlankRange, mode_name
 from socratic.domain.types import (
     BlankSegment,
@@ -176,6 +177,7 @@ def assemble(
     current_blank_id: str | None = None,
     current_guess: str | None = None,
     blank_range: BlankRange | None = None,
+    hint_rung: int | None = None,
 ) -> PromptSegments:
     """Lay a request out as ordered cache segments.
 
@@ -205,6 +207,17 @@ def assemble(
         and segment 1 may not (ADR-0006) — the schema fragment cannot carry it
         either, since array-count keywords are outside the subset structured
         outputs accept (#72).
+      hint_rung: Which rung of the hint ladder a **wrong** answer lands on,
+        1-based. The client counts the wrong answers and picks the rung
+        (CONTEXT: Hint ladder / rung); the model writes the text for it, so the
+        rung has to reach the model. It lands in the volatile tail because it
+        is per request — a rung above the last breakpoint would write a fresh
+        cache entry on every answer (ADR-0006) — and because it is knowable
+        *before* the verdict is, which is what lets the hint ride the one
+        response already in flight rather than costing a second call
+        ([ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+        Omitted by every call type but `grade_answer`, and renders nothing when
+        it is.
 
     Returns:
       The three segments in render order, with breakpoints on the first two.
@@ -238,6 +251,7 @@ def assemble(
                     guesses=guesses,
                     current_blank_id=current_blank_id,
                     current_guess=current_guess,
+                    hint_rung=hint_rung,
                 ),
                 cache_control=False,
             ),
@@ -349,8 +363,10 @@ def _render_tail(
     guesses: Sequence[str],
     current_blank_id: str | None,
     current_guess: str | None,
+    hint_rung: int | None = None,
 ) -> str:
-    """The volatile tail: the inquiry, the guesses in order, the current pair.
+    """The volatile tail: the inquiry, the guesses in order, the current pair
+    and the rung a wrong answer lands on.
 
     Sits after the last breakpoint and is never marked cacheable — it changes
     on every single request, so caching it would write a fresh entry each time
@@ -382,6 +398,8 @@ def _render_tail(
         lines.append("  Guess: (none)")
     else:
         lines.append(f"  Guess: {current_guess}")
+    if hint_rung is not None:
+        lines.append(f"  Hint rung if wrong: {hint_rung} of {HINT_LADDER_RUNGS}")
 
     return "\n".join(lines)
 
@@ -525,12 +543,37 @@ differently from the rubric passes, and one that matches the rubric's words
 while plainly missing the idea does not. Spelling, capitalisation, word order
 and reasonable synonyms are never grounds for rejection on their own.
 
-Return the verdict and nothing that pre-empts the next step. If the answer is
-wrong, the client selects which rung of the hint ladder to show; you do not
-choose it and you do not write the hint here. If the answer is right, say so and
-stop. After a correct answer you may be asked to probe. The probe question, when
-one is requested, rides on this same response — asking never costs a further
-call — and a separate call grades the learner's reply to it.
+Return the verdict, and with a wrong answer the hint that goes with it. The
+client counts the attempts and selects which rung of the hint ladder a wrong
+answer lands on; it states that rung with the material below, and you do not
+choose it. Write the hint for the rung you are given and for no other. If the
+answer is right there is no rung, so omit the hint entirely: say the answer is
+right and stop. After a correct answer you may be asked to probe. The probe
+question, when one is requested, rides on this same response — asking never
+costs a further call — and a separate call grades the learner's reply to it.
+
+## The three rungs
+
+The ladder escalates, and the rung you are given says how far along it this
+learner is.
+
+Rung one nudges. Name the kind of thing the blank is asking for, or point at
+the part of the passage that bears on it, without narrowing to a single
+candidate. Rung two narrows. Give the distinguishing property, the constraint,
+or the one worked step that leaves a single candidate standing. Rung three is
+the last one: the blank closes after it and the learner does not answer again,
+so state the answer plainly and give one sentence saying why it is the answer.
+A rung three that withholds is not restraint, it is a dead end.
+
+Write the hint in your own words, pitched at the answer this learner actually
+gave. The rubric supplied with the blank is the answer key and the grading
+criteria: use it to judge, and to know what the answer is, but never reproduce
+it, never quote from it, and never hand its wording back as a hint. A hint that
+repeats the rubric has published the key.
+
+The hint and the reactive tutor line are different things and either, both or
+neither may be present. The line remarks on how the learner phrased what they
+said; the hint moves them toward the answer.
 
 Where the supplied schema includes a reactive tutor line, use it for one
 sentence responding to *how* the learner phrased the answer they gave: the
@@ -545,9 +588,10 @@ ignores the two attempts already made will read as though nobody was listening.
 Do not, however, let the history change the verdict itself: a correct answer on
 the fourth attempt is correct.
 
-Never reveal the answer to a blank the learner has not resolved, and never
-reveal the answer to a different blank. The answer key stays in the backend, and
-what you are shown of it is scoped to the blank in front of you.
+Never reveal the answer to a different blank, and never reveal the answer to
+the blank in front of you before rung three, where the ladder is exhausted and
+revealing it is the point. The answer key stays in the backend, and what you
+are shown of it is scoped to the blank in front of you.
 """
 )
 

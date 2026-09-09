@@ -6,13 +6,15 @@ point where **"a Novice answer costs zero model calls"** becomes assertable
 seam — the deterministic strategy and the model-graded one — and the
 self-explanation probe that rides on top of them.
 
-**One response, three things** (D13,
-[ADR-0013](../../../docs/adr/0013-reactive-tutor-line.md)). The model-graded
-strategy makes exactly one `grade_answer` call per submission, and that single
-response carries the verdict, the probe question (nullable) and the reactive
-tutor line (nullable) together. There is no second request and nothing streams:
-the parallel tutor call ADR-0003 described is withdrawn, and adding one back
-here would falsify master spec acceptance 9.
+**One response, four things** (D13,
+[ADR-0013](../../../docs/adr/0013-reactive-tutor-line.md) as extended by
+[ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+The model-graded strategy makes exactly one `grade_answer` call per submission,
+and that single response carries the verdict, the probe question (nullable), the
+reactive tutor line (nullable) and the hint ladder's rung text (nullable)
+together. There is no second request and nothing streams: the parallel tutor
+call ADR-0003 described is withdrawn, and adding one back here would falsify
+master spec acceptance 9.
 
 **Asking a probe costs no model call; answering one costs exactly one** (D9,
 ADR-0009 as superseded by ADR-0011 and ADR-0013). The question is already in
@@ -44,19 +46,30 @@ and `tests/test_registry.py` scans for one.
 [ADR-0013](../../../docs/adr/0013-reactive-tutor-line.md)). Its feedback is
 wholly pre-authored — the blank's `reinforcement` on a correct answer, its
 `hints` on the way up the ladder — which is what makes the zero-call claim true
-without qualification. `Submission` therefore carries no field for one: the two
+without qualification. `Submission` therefore carries no field for one: the
 nullable riders live on `ModelGrading`, which the deterministic strategy never
 builds, so a Novice result has nowhere for a reactive line to be rather than a
 field that is merely always null.
+
+**The ladder has text in both modes** (#56,
+[ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+Novice reads its rung off `blank.hints`, where the pedagogy payload pre-authored
+it; Advanced reads it off the grading response it just received, because the
+registry forbids an Advanced blank from carrying `hints` at all. Both land in
+`Submission.feedback`, the way both routes to a probe question land in
+`_Grade.probe_question`, so the client renders one field and the caller cannot
+tell which mode wrote it.
 
 **The key never leaves the backend** (D4,
 [ADR-0003](../../../docs/adr/0003-grading-authority-and-key-custody.md)). A
 Novice submission carries an option id and gets back a verdict; the correct
 option id appears in the result on exactly one path, the rung-three reveal. An
 Advanced blank's rubric *is* the key: it goes into segment 2 of the grading
-request and into nothing that `submit` returns, and the rung-three reveal has
-nothing to reveal on that path — there is no option id, and the rubric is not
-one.
+request and into nothing that `submit` returns. The Advanced rung-three reveal
+is the model stating the answer in prose, not the rubric — `revealed_option_id`
+stays null there, because there is no option id on that path — and `_safe_hint`
+drops any hint that carries the rubric verbatim, so the custody claim holds
+whatever the model sends.
 
 **Blank state is derived, never stored twice.** `attempt.guesses` is already
 ordered and already bounded, so resolution and the ladder rung are read off the
@@ -99,6 +112,7 @@ HINT_LADDER_RUNGS = records.HINT_LADDER_RUNGS
 _VERDICT = "verdict"
 _TUTOR_LINE = "tutor_line"
 _PROBE_QUESTION = "probe_question"
+_HINT = "hint"
 _CORRECTION = "correction"
 
 MAX_REOPENS_PER_BLANK = 1
@@ -143,9 +157,9 @@ class GradingParseError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ModelGrading:
-    """The two nullable riders that came back **with** the verdict (D13).
+    """The three nullable riders that came back **with** the verdict (D13).
 
-    One response, three things: the verdict is on `Submission`, and these two
+    One response, four things: the verdict is on `Submission`, and these three
     rode the same response. Grouping them rather than flattening them onto
     `Submission` is what keeps the deterministic path structurally free of a
     reactive tutor line — `Submission.model_grading` is `None` there, so a
@@ -154,10 +168,20 @@ class ModelGrading:
 
     `probe_question` is carried, not acted on. Whether to ask it is
     [#10](https://github.com/derkmed/socratic/issues/10).
+
+    `hint` is the hint ladder's rung text, authored on this response because an
+    Advanced blank carries no pre-authored `hints` for `_hint_for_rung` to read
+    ([#56](https://github.com/derkmed/socratic/issues/56),
+    [ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+    It is carried here *and* routed to `Submission.feedback`, which is the field
+    the Novice ladder already fills: the two routes to a rung's text converge on
+    one field, exactly as the two routes to a probe question converge on
+    `_Grade.probe_question`. It is null on a correct verdict, which has no rung.
     """
 
     tutor_line: str | None
     probe_question: str | None
+    hint: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +319,35 @@ def _hint_for_rung(blank: Blank, rung: int) -> str | None:
     return None
 
 
+def _safe_hint(blank: Blank, hint: str | None) -> str | None:
+    """A model-authored hint, or `None` if it reproduces the answer key.
+
+    **Key custody is structural, not advisory** (D4,
+    [ADR-0003](../../../docs/adr/0003-grading-authority-and-key-custody.md)).
+    An Advanced blank's rubric *is* the answer key: it goes into segment 2 of
+    the grading request and into nothing `submit` returns. Segment 1 now asks
+    the model for a hint, and tells it never to reproduce or quote the rubric —
+    but an instruction is a request, and the claim ADR-0003 makes is not the
+    kind that a request can support. So the rubric coming back is checked for
+    here, and the hint dropped whole when it is found.
+
+    **Fails closed.** A dropped hint costs the learner one bad turn; a
+    published rubric costs the exercise. Whitespace is normalised before the
+    comparison because a rubric rewrapped into a paragraph is the same
+    disclosure, and the match is case-sensitive substring rather than fuzzy:
+    the point is to catch a copy, and a paraphrase is what was asked for.
+
+    A rubric short enough to appear verbatim inside a legitimate hint is the
+    known false positive, and it is the cheap direction of the trade
+    ([ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+    """
+    if hint is None or not blank.rubric:
+        return hint
+    if " ".join(blank.rubric.split()) in " ".join(hint.split()):
+        return None
+    return hint
+
+
 def _ladder_rung(prior_wrong: int) -> int:
     """Which rung a wrong answer lands on: the next one, capped at three.
 
@@ -358,17 +411,31 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
     reactive tutor line all come back on that one response (D13); a second call
     for any of them would falsify master spec acceptance 9.
 
-    A wrong answer walks the same three-rung ladder as a wrong click. The rung
-    text comes from `_hint_for_rung`, which an Advanced blank never satisfies —
-    the registry forbids an Advanced blank from carrying `hints`, and segment 1
-    tells the model not to write one — so the reactive tutor line is what the
-    learner actually reads. Nothing is revealed on rung three: there is no
-    option id on this path, and the rubric is the key.
+    A wrong answer walks the same three-rung ladder as a wrong click, and
+    **the rung's text is authored on this response** (#56,
+    [ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
+    An Advanced blank carries no pre-authored `hints` — the registry forbids
+    them — so `_hint_for_rung` has nothing to read, and before ADR-0016 a wrong
+    Advanced answer returned a rung number and no text at all.
+
+    The rung is chosen **here**, before the call, as `_ladder_rung` of the wrong
+    guesses so far, and stated in the volatile tail. It is knowable in advance
+    precisely because it does not depend on the verdict — it is the rung a
+    wrong answer *would* land on — which is what lets the hint ride the one
+    response already in flight rather than costing a second call.
+
+    Rung three reveals in prose: the model states the answer, and
+    `revealed_option_id` stays `None` because there is no option id on this
+    path. **The rubric is not the reveal.** Segment 1 forbids reproducing it,
+    and a hint that does so anyway is dropped here — key custody (D4,
+    ADR-0003) is a structural claim, so it may not rest on the model obeying an
+    instruction.
 
     Raises:
       GradingParseError: If the response cannot be read as a verdict and its
-        two nullable riders.
+        three nullable riders.
     """
+    rung = _ladder_rung(context.prior_wrong)
     segments = prompting.assemble(
         prompting.CallType.GRADE_ANSWER,
         profile=context.profile,
@@ -377,9 +444,13 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
         guesses=_render_guesses(context.attempt.guesses),
         current_blank_id=context.blank.blank_id,
         current_guess=context.submitted,
+        hint_rung=rung,
     )
     response = context.model_client.grade_answer(segments)
     verdict, grading = _parse_grading(response.content)
+    grading = dataclasses.replace(
+        grading, hint=_safe_hint(context.blank, grading.hint)
+    )
 
     call = records.ModelCallRecord(
         call_type=prompting.CallType.GRADE_ANSWER.value,
@@ -398,11 +469,10 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
             probe_question=grading.probe_question,
         )
 
-    rung = _ladder_rung(context.prior_wrong)
     return _Grade(
         verdict=verdict,
         hint_rung_shown=rung,
-        feedback=_hint_for_rung(context.blank, rung),
+        feedback=grading.hint or _hint_for_rung(context.blank, rung),
         revealed_option_id=None,
         model_grading=grading,
         model_call=call,
@@ -427,7 +497,7 @@ def _render_guesses(guesses: Sequence[records.Guess]) -> tuple[str, ...]:
 
 
 def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
-    """Read a `grade_answer` response: the verdict and its two riders.
+    """Read a `grade_answer` response: the verdict and its three riders.
 
     The port is deliberately not widened for this. `ModelResponse.content` is
     the structured payload verbatim and parsing it against the call's schema
@@ -435,13 +505,13 @@ def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
     reads its own response, and the reason a probe question landing here costs
     no change to the five-method `ModelClient`.
 
-    Both riders are optional *and* nullable: segment 1 tells the model to omit
-    an optional field rather than fill it with filler, so an absent key and an
-    explicit null mean the same thing.
+    All three riders are optional *and* nullable: segment 1 tells the model to
+    omit an optional field rather than fill it with filler, so an absent key and
+    an explicit null mean the same thing.
 
     Raises:
       GradingParseError: On anything that is not an object carrying a known
-        verdict and, at most, two string-or-null riders.
+        verdict and, at most, three string-or-null riders.
     """
     try:
         payload = json.loads(content)
@@ -470,6 +540,7 @@ def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
     return verdict, ModelGrading(
         tutor_line=_optional_line(payload, _TUTOR_LINE),
         probe_question=_optional_line(payload, _PROBE_QUESTION),
+        hint=_optional_line(payload, _HINT),
     )
 
 

@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from socratic.domain import inquiry as inquiry_module
 from socratic.domain import rating as rating_module
 from socratic.domain import types
 from socratic.domain.modes import ProbeCadence
@@ -80,31 +81,46 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         return None if recorded is None else recorded.probe_cadence
 
     def _authored(body: payloads.AuthorRequest) -> dict[str, Any]:
-        """Author, mint if there is a session, and shape the wire body.
+        """Take the inquiry in, and shape whatever became of it.
 
         Shared by `/quizzes` and `/overlays` so neither grows a second copy of
         the authoring translation — and so the overlay is rendered from exactly
         the body the JSON route returns, which is what keeps the answer key's
         whitelist the only thing standing between the key and the browser.
+
+        **`InquiryIntake`, not `QuizAuthoring`** (#92). The single-topic-focus
+        rule is a decision about the learner's partition, which authoring does
+        not read; going straight to `author` authored a second quiz for a
+        learner who already had one open and left the first in flight.
         """
         settings = _settings(
             body.learner_id, mode=body.mode, probe_cadence=body.probe_cadence
         )
         # Authoring is itself a sync point, so the common case - a learner who
         # changes a valve and then asks a question - needs no separate call.
+        # It syncs on the queued branch too: the Pipe pushes current valves
+        # with every turn, and whether we author is beside the point.
         deps.settings.save(settings)
 
-        result = deps.authoring.author(
+        intake = deps.intake.raise_inquiry(
             body.inquiry,
             body.learner_id,
             mode=settings.mode,
             probe_cadence=settings.probe_cadence,
         )
+        if isinstance(intake, inquiry_module.Queued):
+            return payloads.queued_body(intake)
+        return _started(intake.result, body.learner_id)
 
+    def _started(
+        result: types.AuthoringResult, learner_id: str
+    ) -> dict[str, Any]:
+        """An authored result as its wire body, with a token if it has a
+        session to scope one to."""
         if isinstance(result, types.DirectAnswer):
             return payloads.direct_answer_body(result)
 
-        token = deps.minter.mint(result.quiz_session_id, body.learner_id)
+        token = deps.minter.mint(result.quiz_session_id, learner_id)
         return payloads.quiz_body(
             result, registry=deps.registry, capability_token=token
         )
@@ -135,12 +151,19 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         security.require_service_token(deps, presented)
 
         authored = _authored(body)
-        if authored["kind"] == "quiz":
-            document = overlay.render_overlay(
+        # Three branches, one per `kind` the authoring body can carry. Named
+        # exhaustively rather than as an if/else pair, so a fourth kind fails
+        # here and loudly: the previous `else` sent anything that was not a
+        # quiz to the direct-answer renderer, which is how a queued inquiry
+        # reached the Pipe as a 404 instead of a document.
+        renderers = {
+            "quiz": lambda: overlay.render_overlay(
                 authored, service_base_url=deps.public_base_url
-            )
-        else:
-            document = overlay.render_direct_answer(authored)
+            ),
+            "direct_answer": lambda: overlay.render_direct_answer(authored),
+            "queued": lambda: overlay.render_queued(authored),
+        }
+        document = renderers[authored["kind"]]()
 
         return HTMLResponse(
             content=document,
@@ -148,6 +171,54 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             # The learner's browser renders this inside a `srcdoc` iframe; it is
             # never a file to save (master spec §12).
             headers={"Content-Disposition": "inline"},
+        )
+
+    @app.post("/displacements")
+    def displace_quiz(
+        body: payloads.DisplaceRequest,
+        token: str | None = Depends(security.capability_header),
+    ) -> JSONResponse:
+        """"Start this instead": abandon the open quiz, author this one.
+
+        The capability token for the attempt being displaced is the whole
+        authorization, and it is the right one: it asserts "the bearer is the
+        learner who has this session open", which is exactly the authority the
+        gesture needs. The service token is deliberately *not* accepted — it is
+        held install-wide by the Pipe, and `abandoned` is the only destructive
+        write in the domain.
+
+        The response carries the newly authored quiz, with a token for its
+        session, because the one the caller presented now belongs to a closed
+        attempt and every write to it is refused.
+
+        What is displaced is the learner's latest `in_flight` attempt, which
+        `InquiryIntake` chooses — and which, now that a second inquiry is
+        queued rather than authored, is the attempt the presented token names.
+        """
+        claims, _ = _authorized(token, body.quiz_session_id)
+
+        # The iframe cannot see `UserValves`, so mode and cadence come from
+        # what the Pipe last pushed rather than from the request. Absent
+        # settings are the documented defaults, not a refusal: a learner can
+        # reach this route without ever having touched a valve.
+        settings = deps.settings.get(claims.learner) or LearnerSettings(
+            claims.learner
+        )
+
+        started = deps.intake.start_this_instead(
+            body.inquiry,
+            claims.learner,
+            mode=settings.mode,
+            probe_cadence=settings.probe_cadence,
+        )
+
+        return _json(
+            payloads.displaced_body(
+                _started(started.result, claims.learner),
+                displaced_session_id=(
+                    started.displaced.session_id if started.displaced else None
+                ),
+            )
         )
 
     @app.post("/settings")
@@ -281,7 +352,7 @@ def _settings(
         )
     except ValueError as error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
         ) from None
 
 

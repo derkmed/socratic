@@ -305,3 +305,46 @@ def render_direct_answer(body: Mapping[str, Any]) -> str:
         "</main>"
     )
     return _document(title=str(body.get("topic", "answer")), body=page)
+
+
+def render_queued(body: Mapping[str, Any]) -> str:
+    """Render the queued branch (#92, #15) as a document.
+
+    The learner asked a second question with a quiz already open. The
+    single-topic-focus rule parked it, and this document is what says so: the
+    quiz still waiting for them, the question just saved, and the rest of the
+    queue.
+
+    **No script, no token, no control.** No capability token was minted for
+    this branch — `payloads.queued_body` explains why one cannot be — so there
+    is nothing here for a script to authorize with, and a control that could
+    not reach the service would be a button that does nothing. The learner's
+    live quiz is still the previous message in their chat, and still theirs.
+    The "start this instead" control belongs on *that* document, and is its own
+    issue.
+
+    Everything interpolated here is escaped rather than rendered: the topic is
+    plain text, as it is on `quiz_body`, and the queued topics are the
+    learner's own typed words, which have been through no sanitiser.
+
+    Args:
+      body: The `kind: "queued"` author response.
+
+    Returns:
+      One self-contained HTML document.
+    """
+    topic = html.escape(str(body.get("topic", "")))
+    inquiry = html.escape(str(body.get("inquiry", "")))
+    page = (
+        '<main class="socratic-overlay socratic-queued-notice">\n'
+        '<h1 class="socratic-topic">Saved for later</h1>\n'
+        '<div class="socratic-answer-prose">'
+        f"<p>You asked: <em>{inquiry}</em></p>"
+        f"<p>It is waiting on the quiz you have open — <strong>{topic}"
+        "</strong> — which is the message just above this one. Finish that "
+        "one and this question is still here.</p>"
+        "</div>\n"
+        f"{_queued(body.get('queued_topics') or ())}\n"
+        "</main>"
+    )
+    return _document(title="saved for later", body=page)

@@ -18,6 +18,8 @@ import dataclasses
 import pathlib
 import re
 
+import hashlib
+
 import pytest
 
 from socratic.domain import prompting
@@ -817,3 +819,167 @@ class TestTheBlankBound:
             CallType.AUTHOR_SKELETON, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
         )
         assert explicit == implicit
+
+
+class TestTheRungTheClientSelected:
+    """ADR-0016 / [#56](https://github.com/derkmed/socratic/issues/56).
+
+    The client counts the wrong answers and picks the rung (CONTEXT: Hint
+    ladder / rung); the model writes the text for it. So the rung has to reach
+    the model, and the volatile tail is the only place it can go — it changes
+    on every request, and anything above the last breakpoint would split a
+    cache prefix.
+    """
+
+    ARGUMENTS = dict(
+        profile=ADA,
+        probe_cadence=ProbeCadence.SOMETIMES,
+        quiz=_quiz(),
+        guesses=("b1: 'heap' — wrong",),
+        current_blank_id="b1",
+        current_guess="the stack frame",
+    )
+
+    @pytest.mark.parametrize("rung", [1, 2, 3])
+    def test_the_tail_states_the_rung_and_the_ladder_it_sits_on(self, rung):
+        tail = prompting.assemble(
+            CallType.GRADE_ANSWER, hint_rung=rung, **self.ARGUMENTS
+        ).volatile_tail.text
+        assert f"Hint rung if wrong: {rung} of 3" in tail
+
+    def test_the_rung_sits_with_the_blank_under_consideration(self):
+        # It qualifies the guess being judged, not the history above it.
+        tail = prompting.assemble(
+            CallType.GRADE_ANSWER, hint_rung=2, **self.ARGUMENTS
+        ).volatile_tail.text
+        assert tail.index("## Under consideration") < tail.index("Hint rung")
+
+    def test_the_rung_is_optional_so_existing_callers_are_untouched(self):
+        # Backward compatibility: omitting the argument leaves the tail
+        # byte-identical to what a caller got before the slot existed.
+        omitted = prompting.assemble(CallType.GRADE_ANSWER, **self.ARGUMENTS)
+        explicit_none = prompting.assemble(
+            CallType.GRADE_ANSWER, hint_rung=None, **self.ARGUMENTS
+        )
+        assert omitted.volatile_tail.text == explicit_none.volatile_tail.text
+        assert "Hint rung" not in omitted.volatile_tail.text
+
+    def test_the_rung_never_reaches_a_cached_segment(self):
+        # It is per request. Above the last breakpoint it would write a fresh
+        # cache entry on every single answer (ADR-0006).
+        with_rung = prompting.assemble(
+            CallType.GRADE_ANSWER, hint_rung=3, **self.ARGUMENTS
+        )
+        without = prompting.assemble(CallType.GRADE_ANSWER, **self.ARGUMENTS)
+        assert with_rung.segment_1.text == without.segment_1.text
+        assert with_rung.segment_2.text == without.segment_2.text
+
+
+class TestTheFiveCachePrefixesArePinned:
+    """A tripwire over segment 1, one digest per call type (ADR-0014).
+
+    Editing a segment 1 invalidates that call type's cache prefix for the whole
+    workspace. The cost is real, it is paid once, and **nothing reports it** —
+    breakpoint 1 simply writes a new entry and the symptom is a bill rather
+    than an error. So an edit that was meant to touch one prefix and touched
+    three looks exactly like an edit that touched one.
+
+    These digests make that visible. A deliberate rewrite updates exactly the
+    lines it meant to and the diff says which prefixes were spent; an
+    accidental one fails a test. The five bodies share `_SHARED_STANCE` by
+    concatenation, not by reference at render time, so editing the stance is
+    correctly five failures rather than one.
+
+    **Updating a digest is a decision, not a chore.** If a change here was not
+    argued for in the pull request that makes it, it is a bug.
+    """
+
+    DIGESTS = {
+        CallType.AUTHOR_SKELETON: (
+            "26a6007c9bfa01460cc750df2e5795f549a5beaa657d1147a3b08754686782a6"
+        ),
+        CallType.AUTHOR_PEDAGOGY: (
+            "9eb883fd09f0364a55f902f4bf69eca53246c28800bd2763ad287d07df0a411c"
+        ),
+        # Rewritten once by #56 / ADR-0016, to ask for the hint ladder's rung
+        # text. That invalidation is the accepted cost of the decision.
+        CallType.GRADE_ANSWER: (
+            "27b268225b85ee5dc353677b05b9a4a904ac6374a4d3e0da974716053a04012d"
+        ),
+        CallType.GRADE_PROBE: (
+            "b2fddf2971da9da7bfd6a191d897429b79ab15bd80058fc32215f3fbd1451941"
+        ),
+        CallType.FOLD_NARRATIVE: (
+            "fc89b70c6369baf427ca69f2288571bdb1de0ecf1a68baba4f10d85f6c003ff2"
+        ),
+    }
+
+    @pytest.mark.parametrize("call_type", list(CallType))
+    def test_the_prefix_is_the_one_that_was_last_paid_for(self, call_type):
+        text = prompting.assemble(
+            call_type, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
+        ).segment_1.text
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        assert digest == self.DIGESTS[call_type], (
+            f"segment 1 for {call_type.value} changed. That invalidates its "
+            "cache prefix for the whole workspace (ADR-0014). If the change "
+            "was intended, update the digest and say so in the PR."
+        )
+
+    def test_every_call_type_is_pinned(self):
+        assert set(self.DIGESTS) == set(CallType), "a prefix nobody is watching"
+
+
+class TestSegmentOneAsksForTheRungsText:
+    """The sentence #56 named, and what replaced it (ADR-0016)."""
+
+    def segment_1(self):
+        """The text with its line wrapping flattened.
+
+        These assertions are about what the instructions *say*; where the
+        paragraph happens to break is not part of the claim, and an assertion
+        that broke when a sentence rewrapped would be a test of the formatter.
+        """
+        text = prompting.assemble(
+            CallType.GRADE_ANSWER, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
+        ).segment_1.text
+        return " ".join(text.split())
+
+    def test_the_model_is_no_longer_told_not_to_write_the_hint(self):
+        assert "you do not write the hint here" not in self.segment_1()
+
+    def test_the_model_is_asked_for_the_hint_on_the_rung_it_is_given(self):
+        text = self.segment_1()
+        assert "Write the hint for the rung you are given" in text
+
+    def test_the_client_still_owns_the_choice_of_rung(self):
+        assert "you do not choose it" in self.segment_1()
+
+    def test_rung_three_is_told_to_state_the_answer_and_close_the_blank(self):
+        text = self.segment_1()
+        assert "Rung three is the last" in text
+        assert "state the answer plainly" in text
+
+    def test_the_rubric_is_named_as_the_key_and_forbidden_as_a_hint(self):
+        # D4 / ADR-0003. Instruction is the first line of defence; the second
+        # is `session._grade_by_model`, which drops a hint that carries it.
+        text = self.segment_1()
+        assert "never reproduce it" in text
+        assert "repeats the rubric has published the key" in text
+
+    def test_only_grade_answer_learned_to_write_a_rung(self):
+        # The other four prefixes are undisturbed, which the digest tripwire
+        # also pins. This says it in the vocabulary rather than in a hash.
+        # `author_pedagogy` still mentions the hint ladder — it is the call
+        # that pre-authors the Novice one — so the marker is the new
+        # instruction, not the term.
+        for call_type in CallType:
+            if call_type is CallType.GRADE_ANSWER:
+                continue
+            text = " ".join(
+                prompting.assemble(
+                    call_type, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
+                ).segment_1.text.split()
+            )
+            assert "Write the hint for the rung you are given" not in text
+            assert "Rung three is the last one" not in text
