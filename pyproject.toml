@@ -32,6 +32,12 @@ rendering = [
 service = [
     "fastapi>=0.115",   # routing, request models, dependency-ordered auth
     "uvicorn>=0.30",    # the ASGI server the container runs
+    # `status` is Starlette's, re-exported through FastAPI, and FastAPI's own
+    # pin is only `starlette>=0.46` — which predates
+    # `HTTP_422_UNPROCESSABLE_CONTENT` (added in 0.48.0, deprecating
+    # `HTTP_422_UNPROCESSABLE_ENTITY`). `app.py` reads the new name, so the
+    # floor has to be stated here rather than left to FastAPI (#99).
+    "starlette>=0.48",
 ]
 dev = [
     "pytest>=8",
