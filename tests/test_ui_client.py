@@ -492,6 +492,51 @@ class TestTheVerdict:
         assert isinstance(closed_text, str)
         assert closed_text.strip()
 
+    def test_a_prose_reveal_that_never_arrived_is_not_called_pending(self):
+        """The late-pedagogy notice says the tutor is still writing. On a
+        reveal carrying no option id that is a lie: the reveal is prose
+        authored on this very response (ADR-0016), so a missing one is absent
+        rather than late, and the notice would sit next to a note saying the
+        answer was never named (#128 review)."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'enthalpy');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                feedback_html=None,
+                revealed_option_id=None,
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "showHint")["args"][0]["pedagogyPending"] is False
+
+    def test_a_reveal_whose_option_id_arrived_without_its_text_is_still_pending(
+        self,
+    ):
+        """The other half. Pre-authored feedback comes from a later call, so
+        there a missing text really is one that has not landed yet (D11)."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o2');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                feedback_html=None,
+                revealed_option_id="o1",
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "showHint")["args"][0]["pedagogyPending"] is True
+
     def test_a_gap_the_learner_earned_is_told_nothing_to_say(self):
         """The marker is for a close the learner did not earn. A correct answer
         fills the gap with the answer itself and needs no stand-in."""

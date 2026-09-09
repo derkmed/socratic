@@ -190,6 +190,14 @@ var SocraticQuiz = (function () {
 
     function applyGrade(blankId, submitted, reply) {
       var feedbackHtml = orNull(reply.feedback_html);
+      var revealedOptionId = orNull(reply.revealed_option_id);
+      /* A rung-three close: the blank closed and the learner did not get it
+       * right, so this response carries the reveal (CONTEXT: Reveal) and the
+       * note is where the answer is named. Derived from the verdict rather
+       * than from `hint_rung_shown === 3` because what matters is that the
+       * blank closed unearned. True in both modes — the client cannot see the
+       * mode and does not need to. */
+      var reveal = reply.verdict !== CORRECT && Boolean(reply.blank_resolved);
 
       var event = {
         blankId: blankId,
@@ -199,17 +207,17 @@ var SocraticQuiz = (function () {
          * the skeleton alone, so a learner can answer before the pedagogy
          * payload lands (master spec acceptance 5, D11). Missing pedagogy costs
          * the text, not the verdict — the view is told it is pending rather
-         * than handed a null to render. */
-        pedagogyPending: feedbackHtml === null,
+         * than handed a null to render.
+         *
+         * A reveal carrying no option id is the one place a missing text is
+         * absent rather than late: that reveal is prose authored on this very
+         * response (ADR-0016), so nothing is still being written, and saying
+         * otherwise would contradict the note beside it (#128 review). */
+        pedagogyPending:
+          feedbackHtml === null && !(reveal && revealedOptionId === null),
         rung: reply.hint_rung_shown === undefined ? null : reply.hint_rung_shown,
-        revealedOptionId: orNull(reply.revealed_option_id),
-        /* A rung-three close: the blank closed and the learner did not get it
-         * right, so this response carries the reveal (CONTEXT: Reveal) and the
-         * note is where the answer is named. Derived from the verdict rather
-         * than from `hint_rung_shown === 3` because what matters is that the
-         * blank closed unearned. True in both modes — the client cannot see
-         * the mode and does not need to. */
-        reveal: reply.verdict !== CORRECT && Boolean(reply.blank_resolved)
+        revealedOptionId: revealedOptionId,
+        reveal: reveal
       };
 
       /* The verdict starts the celebration. It comes first because it is what

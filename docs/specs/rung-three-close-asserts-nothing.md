@@ -85,7 +85,13 @@ In order, one seam at a time.
    the answer is in the feedback prose directly above. Where there is neither,
    the note says the answer was not named rather than telling the learner to
    carry on with one they never got.
-5. **A probe correction clears what it does not replace.** `probeGraded` writes
+5. **A reveal with nothing to reveal is not called pending.** `pedagogyPending`
+   stays true for a missing pre-authored text, which really does arrive on a
+   later call, and goes false for a missing prose reveal, which does not: it
+   was authored on this response or not at all (ADR-0016). Otherwise the panel
+   says the tutor is still writing directly above a note saying the answer was
+   never named.
+6. **A probe correction clears what it does not replace.** `probeGraded` writes
    the feedback block only, so the reveal, the tutor line and the pending
    notice from whatever was graded last are hidden alongside it. A probe can be
    answered after the learner has moved on to another blank.
@@ -140,7 +146,11 @@ In order, one seam at a time.
     feedback, which is what a hint dropped by `_safe_hint` leaves — says so,
     and says something different from the case where the feedback does carry
     the reveal.
-12. Not covered by a test, and named here so the gap is on the record: that the
+12. That same reveal is not reported as pending: a prose reveal is authored on
+    the response that carries it, so a missing one is absent, not late. A
+    reveal that has an option id and no text still is pending, because that
+    text comes from a later call.
+13. Not covered by a test, and named here so the gap is on the record: that the
     note and the marker are *placed* where the spec says, that the closed
     state's styling distinguishes it from the resolved one, and that
     `probeGraded` clears the panel it does not rewrite. All three are
