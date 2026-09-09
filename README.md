@@ -55,6 +55,30 @@ Open WebUI comes up on <http://localhost:3000> and the quiz service on
 <http://localhost:8080>. Neither secret has a default: a missing one fails at
 startup rather than silently weakening.
 
+### Changing one of those values later
+
+`compose.yaml` interpolates `SOCRATIC_TOKEN_SECRET`, `SOCRATIC_SERVICE_TOKEN`,
+`ANTHROPIC_API_KEY` and `SOCRATIC_PUBLIC_URL` from your environment or from a
+`.env` file beside it, and a container's environment is fixed when the container
+is **created**. `docker compose restart` reuses the containers it already has,
+so it restarts the process with the environment it was born with: edit
+`ANTHROPIC_API_KEY`, restart, and the service keeps serving the old key with no
+symptom other than behaviour that matches the value you just replaced. Recreate
+rather than restart, from the directory holding `compose.yaml`:
+
+```sh
+docker compose up -d --force-recreate
+```
+
+Naming a service — `docker compose up -d --force-recreate quiz-service` — limits
+the blast radius to the container whose value changed and leaves the other one
+up. From anywhere else, point compose at the checkout, which is also where it
+looks for `.env`:
+
+```sh
+docker compose --project-directory <path-to-checkout> up -d --force-recreate
+```
+
 ### Installing the Pipe
 
 The Pipe is pasted, not installed — it runs inside the Open WebUI container,
