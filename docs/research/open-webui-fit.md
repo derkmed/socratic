@@ -19,9 +19,14 @@ surface backed by our own Anthropic request path (per ADR-0001)?
 
 Rich UI iframes are sandboxed and **fully isolated from the parent page** by
 default: no cookies, no `localStorage`, no parent DOM. `allow-scripts` and
-`allow-downloads` are always on. `allowSameOrigin` and `allowForms` are opt-in
-toggles. Without `allowSameOrigin` the iframe has an opaque origin, so any call
-to our API arrives with `Origin: null` and cannot carry cookie auth.
+`allow-downloads` are always on. `allowSameOrigin` is opt-in on every surface
+(`?? false`). **`allowForms` is opt-in only on some**: measured against 0.11.3,
+the embed frame (`FullHeightIframe src={embed}`) takes `?? false`, while the
+CodeBlock/artifact frame takes `?? true` - so "opt-in" as written here is right
+for embeds and wrong for artifacts. See
+[open-webui-overlay-delivery.md](open-webui-overlay-delivery.md). Without
+`allowSameOrigin` the iframe has an opaque origin, so any call to our API arrives
+with `Origin: null` and cannot carry cookie auth.
 
 ## Assessment
 
