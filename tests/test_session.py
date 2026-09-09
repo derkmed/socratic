@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import random
 from datetime import datetime, timezone
 
 import pytest
@@ -108,6 +109,7 @@ def novice_blank(blank_id: str = "b1", *, pedagogy: bool = True) -> Blank:
         )
         if pedagogy
         else None,
+        probe_question="How did you arrive at that?" if pedagogy else None,
     )
 
 
@@ -1092,3 +1094,605 @@ _SKELETON = json.dumps(
         "queued_topics": [],
     }
 )
+
+
+# --- Probes (#10) ------------------------------------------------------------
+#
+# Master spec acceptance 8 and 13-21. The invariant that shapes every test
+# below: **asking a probe costs no model call and answering one costs exactly
+# one**, so nearly every test here is also a `call_count()` assertion.
+
+
+PROBE_QUESTION = "How did you arrive at that?"
+
+
+def probed(
+    verdict: str = "correct",
+    *,
+    correction: str | None = None,
+    message_id: str = "msg_probe_1",
+    **counters: int,
+) -> ModelResponse:
+    """One `grade_probe` response: the verdict and a nullable correction."""
+    payload: dict = {"verdict": verdict}
+    if correction is not None:
+        payload["correction"] = correction
+    return ModelResponse(
+        content=json.dumps(payload), message_id=message_id, **counters
+    )
+
+
+def pending_probe(blank_id: str = "b1", **overrides) -> Probe:
+    fields = dict(
+        blank_id=blank_id,
+        question=PROBE_QUESTION,
+        self_explanation=None,
+        verdict=None,
+        reopened_blank=False,
+        cadence_at_fire=ProbeCadence.ALWAYS,
+        asked_at=FROZEN_AT,
+        answered_at=None,
+        message_id=None,
+    )
+    fields.update(overrides)
+    return Probe(**fields)
+
+
+def probing_session(
+    attempt: QuizAttempt,
+    *,
+    model_client: RecordingModelClient | None = None,
+    seed: int = 0,
+):
+    """A session with a seeded RNG, so the coin flip is reproducible."""
+    attempts = InMemoryAttemptRepository()
+    attempts.save(attempt)
+    quiz_session = QuizSession(
+        model_client=model_client or RecordingModelClient(fail_if_called=True),
+        attempts=attempts,
+        clock=frozen_clock,
+        rng=random.Random(seed),
+    )
+    return quiz_session, attempts
+
+
+def answer_probe(quiz_session, attempt, blank_id, self_explanation):
+    return quiz_session.answer_probe(
+        learner_id=LEARNER,
+        attempt_id=attempt.attempt_id,
+        blank_id=blank_id,
+        self_explanation=self_explanation,
+    )
+
+
+class TestAskingAProbeCostsNoModelCall:
+    """The half of the call budget that does not move (ADR-0011, ADR-0013).
+
+    Novice asks from `Blank.probe_question`, pre-authored in the pedagogy
+    payload; Advanced asks from `ModelGrading.probe_question`, which rode the
+    one `grade_answer` call the submission was already making. Neither route
+    adds a request.
+    """
+
+    def test_a_novice_probe_fires_against_a_stub_that_raises_on_contact(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        never = RecordingModelClient(fail_if_called=True)
+        quiz_session, attempts = probing_session(attempt, model_client=never)
+
+        result = submit(quiz_session, attempt, "b1", "b1-o1")
+
+        assert result.probe_asked is not None
+        assert result.probe_asked.question == PROBE_QUESTION
+        never.assert_never_called()
+        (probe,) = attempts.get(LEARNER, attempt.attempt_id).probes
+        assert probe.is_answered is False
+
+    def test_an_advanced_probe_adds_nothing_to_the_one_grading_call(self):
+        attempt = attempt_for(advanced_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = grading_stub(graded("correct", probe_question=PROBE_QUESTION))
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+
+        result = submit(quiz_session, attempt, "b1", "the disorder term")
+
+        assert result.probe_asked is not None
+        assert result.probe_asked.question == PROBE_QUESTION
+        assert stub.call_count() == 1
+        assert stub.calls[0].call_type is CallType.GRADE_ANSWER
+
+    def test_no_probe_question_means_no_probe(self):
+        # The #9 window: the skeleton has landed and the pedagogy has not, so
+        # there is no question to ask. It costs the learner the probe, not the
+        # verdict.
+        attempt = attempt_for(
+            novice_quiz(pedagogy=False), probe_cadence=ProbeCadence.ALWAYS
+        )
+        quiz_session, attempts = probing_session(attempt)
+
+        result = submit(quiz_session, attempt, "b1", "b1-o1")
+
+        assert result.probe_asked is None
+        assert attempts.get(LEARNER, attempt.attempt_id).probes == ()
+        assert result.attempt_sealed is True
+
+    def test_a_wrong_answer_never_probes(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        quiz_session, attempts = probing_session(attempt)
+
+        assert submit(quiz_session, attempt, "b1", "b1-o2").probe_asked is None
+        assert attempts.get(LEARNER, attempt.attempt_id).probes == ()
+
+
+class TestAnsweringAProbeCostsExactlyOneCall:
+    """Master spec acceptance 8, asserted in **both** modes.
+
+    This is the whole reason `answer_probe` is a separate method from `submit`:
+    a Novice answer is free and a Novice probe reply is not, and one method
+    could not carry both claims.
+    """
+
+    def test_a_novice_probe_reply_is_one_grade_probe_call(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient({CallType.GRADE_PROBE: [probed("correct")]})
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+        assert stub.call_count() == 0, "asking is free"
+
+        answer = answer_probe(
+            quiz_session, attempt, "b1", "Disorder increases, so entropy it is."
+        )
+
+        assert answer.verdict is Verdict.CORRECT
+        assert stub.call_count() == 1
+        assert stub.calls[0].call_type is CallType.GRADE_PROBE
+
+    def test_an_advanced_probe_reply_is_one_grade_probe_call(self):
+        attempt = attempt_for(advanced_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {
+                CallType.GRADE_ANSWER: [
+                    graded("correct", probe_question=PROBE_QUESTION)
+                ],
+                CallType.GRADE_PROBE: [probed("correct")],
+            }
+        )
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "the disorder term")
+
+        answer_probe(
+            quiz_session, attempt, "b1", "The second law bounds it, nothing else."
+        )
+
+        assert stub.call_count() == 2
+        assert [call.call_type for call in stub.calls] == [
+            CallType.GRADE_ANSWER,
+            CallType.GRADE_PROBE,
+        ]
+
+    def test_the_reply_and_the_question_reach_the_volatile_tail(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient({CallType.GRADE_PROBE: [probed("correct")]})
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+        (call,) = stub.calls
+        assert call.segments.call_type is CallType.GRADE_PROBE
+        tail = call.segments.volatile_tail
+        assert "Disorder increases." in tail.text
+        assert PROBE_QUESTION in tail.text
+        assert tail.cache_control is False
+        assert call.segments.breakpoints() == (0, 1)
+
+    def test_the_probe_call_is_stamped_on_the_attempt(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {
+                CallType.GRADE_PROBE: [
+                    probed(
+                        "correct",
+                        message_id="msg_01probe",
+                        input_tokens=800,
+                        output_tokens=90,
+                        cache_read_input_tokens=512,
+                    )
+                ]
+            }
+        )
+        quiz_session, attempts = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+        (call,) = attempts.get(LEARNER, attempt.attempt_id).model_calls
+        assert call.call_type == CallType.GRADE_PROBE.value
+        assert call.message_id == "msg_01probe"
+        assert call.usage.cache_read_input_tokens == 512
+
+    def test_the_answered_probe_replaces_the_pending_one(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {CallType.GRADE_PROBE: [probed("correct", message_id="msg_01probe")]}
+        )
+        quiz_session, attempts = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+        (probe,) = attempts.get(LEARNER, attempt.attempt_id).probes
+        assert probe.self_explanation == "Disorder increases."
+        assert probe.verdict is Verdict.CORRECT
+        assert probe.answered_at == FROZEN_AT
+        assert probe.message_id == "msg_01probe"
+
+    def test_answering_a_probe_that_is_not_pending_is_a_wiring_error(self):
+        attempt = attempt_for(novice_quiz())
+        quiz_session, _ = probing_session(attempt)
+
+        with pytest.raises(session_module.NoPendingProbe):
+            answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+    @pytest.mark.parametrize(
+        "content", ["not json", '{"verdict": "maybe"}', '{"correction": "x"}']
+    )
+    def test_an_unreadable_probe_response_raises(self, content):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {
+                CallType.GRADE_PROBE: [
+                    ModelResponse(content=content, message_id="msg_bad")
+                ]
+            }
+        )
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        with pytest.raises(GradingParseError):
+            answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+
+class TestWhatAFailedProbeDoesComesFromTheRegistry:
+    """D9 / ADR-0009. `probe_failure_behavior` is read, never branched on."""
+
+    def _advanced(self, *probe_responses, grading=None):
+        attempt = attempt_for(advanced_quiz(("b1",)), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {
+                CallType.GRADE_ANSWER: list(grading)
+                if grading
+                else [
+                    graded("incorrect"),
+                    graded("correct", probe_question=PROBE_QUESTION),
+                ],
+                CallType.GRADE_PROBE: list(probe_responses),
+            }
+        )
+        quiz_session, attempts = probing_session(attempt, model_client=stub)
+        return quiz_session, attempts, attempt
+
+    def test_a_failed_advanced_probe_reopens_the_blank(self):
+        # Acceptance 13, first half.
+        quiz_session, attempts, attempt = self._advanced(probed("incorrect"))
+        submit(quiz_session, attempt, "b1", "heat")
+        submit(quiz_session, attempt, "b1", "the disorder term")
+
+        answer = answer_probe(quiz_session, attempt, "b1", "It just looked right.")
+
+        assert answer.verdict is Verdict.INCORRECT
+        assert answer.blank_reopened is True
+        assert answer.blank_resolved is False
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert session_module.is_blank_resolved(stored, "b1") is False
+        assert stored.probes[0].reopened_blank is True
+
+    def test_the_ladder_resumes_at_the_next_rung_not_at_rung_one(self):
+        # Acceptance 13, the half that matters. The learner had reached rung 1
+        # before answering correctly, so the re-opened blank shows rung **2** —
+        # a failed probe is evidence they needed more help, not less.
+        quiz_session, _, attempt = self._advanced(
+            probed("incorrect"),
+            grading=[
+                graded("incorrect"),
+                graded("correct", probe_question=PROBE_QUESTION),
+                graded("incorrect"),
+            ],
+        )
+        first = submit(quiz_session, attempt, "b1", "heat")
+        assert first.hint_rung_shown == 1
+        submit(quiz_session, attempt, "b1", "the disorder term")
+        answer_probe(quiz_session, attempt, "b1", "It just looked right.")
+
+        again = submit(quiz_session, attempt, "b1", "heat again")
+
+        assert again.hint_rung_shown == 2
+
+    def test_a_failed_novice_probe_leaves_the_blank_resolved(self):
+        # Acceptance 14. Re-opening a two-option bank whose answer the learner
+        # was just told is degenerate, so Novice corrects and moves on.
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {CallType.GRADE_PROBE: [probed("incorrect", correction="Not quite.")]}
+        )
+        quiz_session, _ = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer = answer_probe(quiz_session, attempt, "b1", "I guessed.")
+
+        assert answer.verdict is Verdict.INCORRECT
+        assert answer.correction == "Not quite."
+        assert answer.blank_reopened is False
+        assert answer.blank_resolved is True
+        assert answer.attempt_sealed is True
+
+    def test_a_blank_reopens_at_most_once(self):
+        # Acceptance 15: the second failed probe reveals and moves on.
+        quiz_session, attempts, attempt = self._advanced(
+            probed("incorrect"), probed("incorrect")
+        )
+        submit(quiz_session, attempt, "b1", "heat")
+        submit(quiz_session, attempt, "b1", "the disorder term")
+        answer_probe(quiz_session, attempt, "b1", "It just looked right.")
+        submit(quiz_session, attempt, "b1", "the disorder term")
+
+        second = answer_probe(quiz_session, attempt, "b1", "Still guessing.")
+
+        assert second.blank_reopened is False
+        assert second.blank_resolved is True
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert [probe.reopened_blank for probe in stored.probes] == [True, False]
+        assert session_module.is_blank_resolved(stored, "b1") is True
+
+    def test_the_behaviour_comes_from_the_policy_and_not_from_the_mode(self):
+        # The proof that the registry is what is read: a Novice attempt whose
+        # registered policy says REOPEN_BLANK re-opens, mode notwithstanding.
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        reopening = ModeRegistry(
+            {
+                DifficultyMode.NOVICE: dataclasses.replace(
+                    NOVICE_POLICY,
+                    probe_failure_behavior=ProbeFailureBehavior.REOPEN_BLANK,
+                )
+            }
+        )
+        attempts = InMemoryAttemptRepository()
+        attempts.save(attempt)
+        quiz_session = QuizSession(
+            model_client=RecordingModelClient(
+                {CallType.GRADE_PROBE: [probed("incorrect")]}
+            ),
+            attempts=attempts,
+            registry=reopening,
+            clock=frozen_clock,
+            rng=random.Random(0),
+        )
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer = answer_probe(quiz_session, attempt, "b1", "I guessed.")
+
+        assert answer.blank_reopened is True
+
+
+class TestCadenceIsClientOwnedAndReproducible:
+    """Acceptance 17, 19 and 21. Asking is free, so the whole class runs
+    against a stub that raises the moment it is consulted."""
+
+    FIVE = ("b1", "b2", "b3", "b4", "b5")
+
+    def _walk(self, cadence: ProbeCadence, *, seed: int):
+        """Answer all five blanks correctly; report which ones were probed."""
+        attempt = attempt_for(novice_quiz(self.FIVE), probe_cadence=cadence)
+        quiz_session, attempts = probing_session(attempt, seed=seed)
+        for blank_id in self.FIVE:
+            submit(quiz_session, attempt, blank_id, f"{blank_id}-o1")
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        return tuple(probe.blank_id for probe in stored.probes)
+
+    def test_the_same_seed_produces_the_same_sequence(self):
+        assert self._walk(ProbeCadence.SOMETIMES, seed=7) == self._walk(
+            ProbeCadence.SOMETIMES, seed=7
+        )
+
+    def test_different_seeds_do_produce_different_sequences(self):
+        # Otherwise the reproducibility assertion above is vacuously true.
+        sequences = {
+            self._walk(ProbeCadence.SOMETIMES, seed=seed) for seed in range(12)
+        }
+        assert len(sequences) > 1
+
+    def test_the_final_blank_is_probed_whatever_the_seed(self):
+        # Acceptance 17's second half. `sometimes` short-circuits on the final
+        # blank without drawing at all, so the guarantee is structural rather
+        # than a property of the seeds that happen to be tried here.
+        for seed in range(40):
+            assert "b5" in self._walk(
+                ProbeCadence.SOMETIMES, seed=seed
+            ), f"seed {seed} skipped the final blank"
+
+    def test_always_probes_every_correct_answer(self):
+        assert self._walk(ProbeCadence.ALWAYS, seed=3) == self.FIVE
+
+    def test_final_blank_only_probes_the_last_blank_and_no_other(self):
+        # Acceptance 19.
+        for seed in range(10):
+            assert self._walk(ProbeCadence.FINAL_BLANK_ONLY, seed=seed) == ("b5",)
+
+    def test_off_fires_nothing(self):
+        for seed in range(10):
+            assert self._walk(ProbeCadence.OFF, seed=seed) == ()
+
+    def test_an_attempt_authored_with_probes_off_is_readable_as_suppressed(self):
+        # Acceptance 21: from the record alone, with zero probes present.
+        attempt = attempt_for(
+            novice_quiz(("b1", "b2")), probe_cadence=ProbeCadence.OFF
+        )
+        quiz_session, attempts = probing_session(attempt, seed=1)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+        submit(quiz_session, attempt, "b2", "b2-o1")
+
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert stored.probe_cadence_at_authoring is ProbeCadence.OFF
+        assert stored.probes == ()
+        assert stored.outcome is Outcome.RESOLVED
+
+    def test_the_cadence_at_fire_is_stamped_on_each_probe(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        quiz_session, attempts = probing_session(attempt)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        (probe,) = attempts.get(LEARNER, attempt.attempt_id).probes
+        assert probe.cadence_at_fire is ProbeCadence.ALWAYS
+
+
+class TestChangingTheCadenceMidQuiz:
+    """Acceptance 20 / ADR-0010: it applies from the next correct answer, and a
+    probe already on screen stands."""
+
+    def test_it_takes_effect_on_the_next_correct_answer(self):
+        attempt = attempt_for(
+            novice_quiz(("b1", "b2")), probe_cadence=ProbeCadence.OFF
+        )
+        quiz_session, _ = probing_session(attempt)
+
+        first = quiz_session.submit(
+            learner_id=LEARNER,
+            attempt_id=attempt.attempt_id,
+            blank_id="b1",
+            submitted="b1-o1",
+            probe_cadence=ProbeCadence.OFF,
+        )
+        second = quiz_session.submit(
+            learner_id=LEARNER,
+            attempt_id=attempt.attempt_id,
+            blank_id="b2",
+            submitted="b2-o1",
+            probe_cadence=ProbeCadence.ALWAYS,
+        )
+
+        assert first.probe_asked is None
+        assert second.probe_asked is not None
+        assert second.probe_asked.cadence_at_fire is ProbeCadence.ALWAYS
+
+    def test_a_probe_already_pending_is_unaffected(self):
+        attempt = attempt_for(
+            novice_quiz(("b1", "b2")), probe_cadence=ProbeCadence.ALWAYS
+        )
+        quiz_session, attempts = probing_session(attempt)
+        first = quiz_session.submit(
+            learner_id=LEARNER,
+            attempt_id=attempt.attempt_id,
+            blank_id="b1",
+            submitted="b1-o1",
+            probe_cadence=ProbeCadence.ALWAYS,
+        )
+        assert first.probe_asked is not None
+
+        second = quiz_session.submit(
+            learner_id=LEARNER,
+            attempt_id=attempt.attempt_id,
+            blank_id="b2",
+            submitted="b2-o1",
+            probe_cadence=ProbeCadence.OFF,
+        )
+
+        assert second.probe_asked is None
+        assert second.attempt_sealed is False, "b1's probe still stands"
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert len(stored.probes) == 1
+        assert stored.probes[0].is_answered is False
+        assert stored.probes[0].is_dismissed is False
+
+
+class TestOneSealPredicateServesEveryProbeCase:
+    """Acceptance 16 and 18. Probes on, off and dismissed — every case below
+    goes through `is_sealable`, and none of them adds a second path."""
+
+    def test_a_pending_probe_holds_the_attempt_open_and_answering_seals_it(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient({CallType.GRADE_PROBE: [probed("correct")]})
+        quiz_session, attempts = probing_session(attempt, model_client=stub)
+
+        result = submit(quiz_session, attempt, "b1", "b1-o1")
+        assert result.blank_resolved is True
+        assert result.attempt_sealed is False
+
+        answer = answer_probe(quiz_session, attempt, "b1", "Disorder increases.")
+
+        assert answer.attempt_sealed is True
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert stored.outcome is Outcome.RESOLVED
+        assert stored.sealed_at == FROZEN_AT
+
+    def test_a_dismissed_probe_does_not_block_sealing(self):
+        # Acceptance 18, and the reason `dismissed_at` had to exist: without it
+        # this attempt and the one above are the same record.
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        never = RecordingModelClient(fail_if_called=True)
+        quiz_session, attempts = probing_session(attempt, model_client=never)
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        dismissal = quiz_session.dismiss_probe(
+            learner_id=LEARNER, attempt_id=attempt.attempt_id, blank_id="b1"
+        )
+
+        assert dismissal.attempt_sealed is True
+        never.assert_never_called()
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        (probe,) = stored.probes
+        assert probe.self_explanation is None
+        assert probe.dismissed_at == FROZEN_AT
+        assert probe.is_answered is False
+        assert stored.outcome is Outcome.RESOLVED
+
+    def test_the_predicate_reads_dismissal_rather_than_a_second_path(self):
+        quiz = novice_quiz()
+        answered = attempt_for(quiz).with_guess(
+            Guess(
+                blank_id="b1",
+                submitted="b1-o1",
+                verdict=Verdict.CORRECT,
+                attempt_ordinal=1,
+                hint_rung_shown=None,
+                created_at=FROZEN_AT,
+                graded_by=GradingStrategy.DETERMINISTIC,
+            )
+        )
+        pending = answered.with_probe(pending_probe())
+        dismissed = answered.with_probe(
+            dataclasses.replace(pending_probe(), dismissed_at=FROZEN_AT)
+        )
+
+        assert session_module.has_pending_probe(pending) is True
+        assert session_module.has_pending_probe(dismissed) is False
+        assert session_module.is_sealable(pending) is False
+        assert session_module.is_sealable(dismissed) is True
+
+    def test_a_failed_advanced_probe_un_fires_completion(self):
+        # The reason the predicate is never "the last blank resolved": this
+        # attempt was complete a moment ago and is not any more.
+        attempt = attempt_for(advanced_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        stub = RecordingModelClient(
+            {
+                CallType.GRADE_ANSWER: [
+                    graded("correct", probe_question=PROBE_QUESTION)
+                ],
+                CallType.GRADE_PROBE: [probed("incorrect")],
+            }
+        )
+        quiz_session, attempts = probing_session(attempt, model_client=stub)
+        submit(quiz_session, attempt, "b1", "the disorder term")
+
+        answer = answer_probe(quiz_session, attempt, "b1", "It looked right.")
+
+        assert answer.attempt_sealed is False
+        stored = attempts.get(LEARNER, attempt.attempt_id)
+        assert stored.outcome is Outcome.IN_FLIGHT
+        assert session_module.is_sealable(stored) is False
+
+    def test_dismissing_a_probe_that_is_not_pending_is_a_wiring_error(self):
+        attempt = attempt_for(novice_quiz())
+        quiz_session, _ = probing_session(attempt)
+
+        with pytest.raises(session_module.NoPendingProbe):
+            quiz_session.dismiss_probe(
+                learner_id=LEARNER, attempt_id=attempt.attempt_id, blank_id="b1"
+            )

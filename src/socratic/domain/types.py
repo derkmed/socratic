@@ -70,9 +70,18 @@ class Option:
 class Blank:
     """One masked element.
 
-    Novice carries `options`, `correct_option_id`, `reinforcement` and three
-    `hints`; Advanced carries a `rubric`. Both sets are nullable on the one
-    type — which is why the conditional validator is load-bearing.
+    Novice carries `options`, `correct_option_id`, `reinforcement`, three
+    `hints` and a `probe_question`; Advanced carries a `rubric`. Both sets are
+    nullable on the one type — which is why the conditional validator is
+    load-bearing.
+
+    `probe_question` is pre-authored per blank exactly as the hint rungs are
+    (ADR-0011), and that is the whole of "asking a probe costs no model call"
+    on the deterministic path: Novice has the question in hand before the
+    learner answers, and Advanced gets one as a nullable field on the grading
+    response it was already making (ADR-0013). It is nullable here for the same
+    reason `hints` is — the pedagogy payload lands after the skeleton, and a
+    blank answered in that window costs the learner the probe, not the verdict.
     """
 
     blank_id: str
@@ -83,6 +92,7 @@ class Blank:
     correct_option_id: str | None = None
     reinforcement: str | None = None
     hints: tuple[str, str, str] | None = None
+    probe_question: str | None = None
 
     # Advanced.
     rubric: str | None = None

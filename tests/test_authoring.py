@@ -258,7 +258,9 @@ class TestPersistence:
         assert attempt.attempt_id != result.quiz_session_id
 
     def test_the_authoring_call_is_stamped_with_its_message_id_and_usage(self):
-        _, _, attempts = author(quiz_payload())
+        _, _, attempts = author(
+            quiz_payload(), input_tokens=910, output_tokens=37
+        )
 
         attempt = attempts.list_for_learner(LEARNER)[0]
         assert len(attempt.model_calls) == 1
@@ -267,6 +269,10 @@ class TestPersistence:
         assert call.message_id == "msg_01AUTHORING"
         assert call.usage.cache_read_input_tokens == 512
         assert call.usage.cache_creation_input_tokens == 0
+        # #55: the plain input/output counts must survive onto the record
+        # too, not just the two cache counters.
+        assert call.usage.input_tokens == 910
+        assert call.usage.output_tokens == 37
 
     def test_the_attempt_records_the_model_the_effort_and_the_cadence(self):
         service, _, attempts = build(quiz_payload())
@@ -613,6 +619,7 @@ def pedagogy_payload(blank_ids=("b1",), **overrides) -> dict:
             {
                 "blank_id": blank_id,
                 "reinforcement": "Entropy is the one that never decreases.",
+                "probe_question": "How did you arrive at that?",
                 "hints": [
                     "Think about disorder.",
                     "It is the quantity the second law bounds.",
@@ -771,6 +778,24 @@ class TestThePedagogyPayloadLanding:
         )
         assert attempt.quiz.blanks[0].reinforcement
         assert attempts.list_for_learner(LEARNER)[0] == attempt
+
+    def test_the_pre_authored_probe_question_rides_the_payload(self):
+        # ADR-0011: a Novice probe question is pre-authored per blank exactly
+        # as the hint rungs are, which is the whole of "asking a probe costs no
+        # model call" on the deterministic path (#10).
+        _, attempt, _, _ = author_both()
+
+        assert attempt.quiz.blanks[0].probe_question == "How did you arrive at that?"
+
+    def test_a_payload_with_no_probe_question_is_tolerated(self):
+        # The #9 window again: a late or partial payload costs the learner the
+        # probe, not the verdict.
+        payload = pedagogy_payload()
+        del payload["blanks"][0]["probe_question"]
+        _, attempt, _, _ = author_both(pedagogy=payload)
+
+        assert attempt.quiz.blanks[0].probe_question is None
+        assert authoring.validation.validate_quiz(attempt.quiz) == ()
 
     def test_the_merged_quiz_validates_as_complete(self):
         _, attempt, _, _ = author_both()
