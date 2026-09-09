@@ -233,9 +233,13 @@ A Pipe mapping `__user__` → `LearnerId`, calling the quiz service, returning t
 logic and makes no model calls. The `fetch` this depends on **has been observed**,
 not merely read: a spike reached a stub service from a `srcdoc` iframe sandboxed
 without `allow-same-origin`, in Chrome and Edge, with `Origin: null` and both
-`POST`s preflighted (`docs/research/open-webui-fit.md`). What is still unobserved is
-the composition — this Pipe, inside a real default install, reaching the real quiz
-service, which is acceptance 34.
+`POST`s preflighted (`docs/research/open-webui-fit.md`). The composition has since
+been observed too, one ring short of the last: this Pipe called the **real** quiz
+service, and the overlay it returned reached that service by `fetch` from the
+sandboxed iframe and got a verdict, in Chrome and Edge
+(`docs/specs/open-webui-pipe.md`). What remains unobserved is only Open WebUI
+itself as the parent page, which needs a container runtime and an API key — that
+last ring is acceptance 34, and the README carries it as a manual smoke test.
 
 ## Out of scope
 
