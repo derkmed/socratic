@@ -1,0 +1,238 @@
+<title>Architectural State &mdash; 9 September 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+  :root{
+    --ground:#F1F2ED; --surface:#FAFBF7; --surface-2:#E7EAE2;
+    --ink:#14231F; --muted:#57635C; --rule:#C6CDC2;
+    --accent:#14605A; --key:#A0660F; --rose:#93353E;
+    --shadow:0 1px 2px rgba(20,35,31,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ground:#111614; --surface:#1A201D; --surface-2:#232A26;
+      --ink:#E4EAE3; --muted:#95A099; --rule:#333B36;
+      --accent:#63C0B1; --key:#DCA44C; --rose:#DD8B91;
+      --shadow:0 1px 2px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#111614; --surface:#1A201D; --surface-2:#232A26;
+    --ink:#E4EAE3; --muted:#95A099; --rule:#333B36;
+    --accent:#63C0B1; --key:#DCA44C; --rose:#DD8B91;
+    --shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+
+  body{background:var(--ground);color:var(--ink);margin:0;
+    font-family:"Source Sans 3",ui-sans-serif,system-ui,sans-serif;
+    font-size:16.5px;line-height:1.6;}
+  .wrap{max-width:74rem;margin:0 auto;padding:4rem 1.5rem 6rem;
+    display:flex;flex-direction:column;gap:3.25rem;}
+  .col{max-width:37rem;}
+
+  h1{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:clamp(2rem,4.5vw,2.9rem);
+    line-height:1.08;letter-spacing:-.015em;margin:0 0 .6rem;text-wrap:balance;}
+  h2{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:1.5rem;
+    line-height:1.2;margin:0 0 .35rem;text-wrap:balance;}
+  p{margin:0 0 .9rem;}
+  .lede{font-size:1.12rem;color:var(--muted);max-width:38rem;}
+  .eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem;}
+  .fignum{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 .3rem;}
+  code{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.86em;
+    background:var(--surface-2);padding:.08em .34em;border-radius:3px;}
+  strong{font-weight:600;}
+  a{color:var(--accent);}
+
+  section{display:flex;flex-direction:column;gap:1.1rem;}
+  figure{margin:0;display:flex;flex-direction:column;gap:.75rem;}
+  .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);
+    border-radius:5px;padding:1.25rem;box-shadow:var(--shadow);}
+  /* Natural size inside a scrolling frame, as the drawing next door does it:
+     shrinking the whole graph to the page width makes every label unreadable. */
+  .mermaid svg{display:block;max-width:none;height:auto;}
+  figcaption{font-size:.92rem;color:var(--muted);max-width:40rem;}
+
+  .note{border-left:2px solid var(--key);padding:.15rem 0 .15rem 1rem;color:var(--muted);
+    font-size:.95rem;max-width:38rem;}
+  ul{margin:0 0 .9rem;padding-left:1.15rem;}
+  li{margin-bottom:.5rem;}
+  hr{border:0;border-top:1px solid var(--rule);margin:0;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+</style>
+
+<div class="wrap">
+
+<header class="col">
+  <p class="eyebrow">As built &middot; 9 September 2026</p>
+  <h1>Architectural State</h1>
+  <p class="lede">What the code actually does today, drawn from the running source rather than from
+  the plan. Its sibling <a href="planned_architecture.html">planned_architecture.html</a> is the
+  design as it was drawn before the prototype existed; this is where it landed.</p>
+</header>
+
+<hr>
+
+<section>
+  <div class="col">
+    <p class="fignum">Figure 1</p>
+    <h2>The whole system</h2>
+    <p>Two containers, one browser, one offline job. Solid arrows are paths that run today; dashed
+    ones are decided but not yet built. The <strong>portability seam</strong> is a process boundary
+    now rather than a convention &mdash; the domain runs as its own service, so an Open WebUI import
+    below it would not resolve.</p>
+  </div>
+  <figure>
+    <div class="scroll">
+<pre class="mermaid">
+flowchart TB
+    subgraph BROWSER["Learner's browser"]
+        CHAT["Open WebUI chat<br/>picks model 'socratic', asks a question"]
+        IFRAME["Overlay<br/>sandboxed srcdoc iframe, opaque origin<br/>holds capability token, no answer key"]
+    end
+
+    subgraph OWUI["open-webui container :3000"]
+        PIPE["Pipe — pipe/socratic_pipe.py<br/>the whole adapter: __user__ to LearnerId<br/>Valves: service_url, service_token, mode, probe_cadence"]
+    end
+
+    subgraph SVC["quiz-service container :8080 — FastAPI"]
+        subgraph HTTP["Routes — service/app.py"]
+            R1["POST /quizzes<br/>POST /overlays"]
+            R2["POST /settings"]
+            R3["POST /answers<br/>POST /probes"]
+            R4["POST /displacements<br/>POST /ratings"]
+        end
+
+        SEC["security<br/>service token header (Pipe)<br/>capability token (iframe): HMAC, one<br/>QuizSessionId + LearnerId, short TTL"]
+
+        subgraph DOMAIN["domain/ — below the portability seam"]
+            INTAKE["InquiryIntake<br/>new / queued / displacement"]
+            AUTHOR["QuizAuthoring<br/>mints ULID QuizSessionId<br/>skeleton then pedagogy"]
+            SESSION["QuizSession<br/>grade, hint ladder rung,<br/>probe cadence, seal"]
+            REG["ModeRegistry to ModePolicy<br/>the only place mode is branched on<br/>NOVICE 1-2 blanks / ADVANCED 4-6"]
+            PROMPT["prompting<br/>seg 1 invariant (cached, per call type)<br/>seg 2 profile+quiz | volatile tail"]
+            MC["ModelClient protocol<br/>5 call types"]
+        end
+
+        subgraph RENDER["rendering/ + ui/"]
+            SAN["sanitiser, markdown, mathml<br/>LaTeX to MathML server-side"]
+            OV["overlay.render_overlay<br/>self-contained HTML, no CDN/font/JS deps"]
+        end
+
+        subgraph REPOS["repositories — in-memory today (ADR-0005)"]
+            AR[("AttemptRepository<br/>QuizAttempt: quiz + guesses + probes<br/>answer key never leaves here")]
+            RR[("RatingRepository")]
+            SR[("LearnerSettingsRepository")]
+            PR[("LearnerProfileRepository<br/>not reachable from the service")]
+        end
+    end
+
+    ANTH["adapters/anthropic_client.py<br/>Anthropic Messages API — claude-opus-5, effort low"]
+    DISK[/"Collected records on disk<br/>write-only audit trail — ADR-0018, not built yet"/]
+    PB["ProfileBuilder — offline job<br/>ledger (authoritative) + folded narrative<br/>advances a watermark, never on the critical path"]
+
+    CHAT -->|"inquiry"| PIPE
+    PIPE -->|"POST /overlays + service token<br/>via compose DNS quiz-service:8080"| R1
+    PIPE -->|"UserValves changed"| R2
+    R1 --> SEC --> INTAKE --> AUTHOR
+    AUTHOR --> REG
+    AUTHOR --> PROMPT --> MC --> ANTH
+    AUTHOR --> AR
+    R1 --> SAN --> OV
+    OV -->|"HTML + capability token + SOCRATIC_PUBLIC_URL"| R1
+    R1 -->|"HTML"| PIPE
+    PIPE -->|"emits an 'embeds' event, never returns it (ADR-0017)"| IFRAME
+
+    IFRAME -->|"fetch direct to localhost:8080<br/>bearer capability token"| R3
+    IFRAME --> R4
+    R3 --> SEC --> SESSION
+    SESSION --> REG
+    SESSION --> AR
+    SESSION -->|"Advanced only: grade_answer / grade_probe"| PROMPT
+    SESSION --> SAN
+    R3 -->|"verdict, feedback_html, hint rung,<br/>optional probe, fresh capability token"| IFRAME
+    R2 --> SR
+    R4 --> RR
+    R4 --> AR
+    SESSION -.->|"reads cadence only, never mode"| SR
+
+    AR -.-> DISK
+    RR -.-> DISK
+    DISK -.-> PB
+    PB -.-> PR
+    PR -.->|"segment 2"| PROMPT
+
+    classDef seam stroke-dasharray:5 3
+    class DISK,PB seam
+</pre>
+    </div>
+    <figcaption>Drawn from <code>service/app.py</code>, <code>pipe/socratic_pipe.py</code> and the
+    <code>domain/</code> package as they stand on 9 September 2026.</figcaption>
+  </figure>
+</section>
+
+<hr>
+
+<section class="col">
+  <h2>What the figure is saying</h2>
+  <ul>
+    <li><strong>Two network paths to the service, two credentials.</strong> The Pipe reaches it by
+    the compose DNS name with the shared <code>SOCRATIC_SERVICE_TOKEN</code>; the iframe reaches it
+    from the learner&rsquo;s browser at <code>SOCRATIC_PUBLIC_URL</code> with an HMAC capability
+    token scoped to one session &mdash; because a sandboxed <code>srcdoc</code> frame has an opaque
+    origin and cannot authenticate by any ambient means. <code>ServiceDependencies</code> keeps the
+    two as separate fields so no handler can accept either.</li>
+    <li><strong>The overlay is emitted, not returned.</strong> The Pipe awaits
+    <code>__event_emitter__</code> with an <code>embeds</code> event (ADR-0017). A Pipe that returns
+    it renders nothing at all, silently.</li>
+    <li><strong>Model calls only where the arrows show them.</strong> Authoring always &mdash;
+    skeleton then pedagogy. Grading only in Advanced: Novice feedback is wholly pre-authored, so a
+    Novice answer costs zero model calls.</li>
+    <li><strong>Mode is branched on in exactly one place.</strong> Everything that varies by mode is
+    bundled into a <code>ModePolicy</code> behind <code>ModeRegistry</code>; an
+    <code>if mode ==</code> anywhere else is a bug.</li>
+  </ul>
+  <p class="note">Dashed means decided, not built. <code>adapters/</code> holds only
+  <code>anthropic_client.py</code> today; the on-disk record writer of
+  <a href="../adr/0018-collected-records-on-disk.md">ADR-0018</a> and the
+  <code>ProfileBuilder</code> wiring are not in the running service, and
+  <code>LearnerProfileRepository</code> is not reachable from it at all. Storage is in-memory, so a
+  restart loses every in-flight quiz.</p>
+</section>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  // Mermaid takes colours as values, not as CSS variables, so read the resolved
+  // tokens off :root and hand them over — the same palette the drawing next door
+  // uses, in whichever theme the reader's browser is in.
+  var css = getComputedStyle(document.documentElement);
+  var v = function (name) { return css.getPropertyValue(name).trim(); };
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    securityLevel: "strict",
+    flowchart: { curve: "basis", htmlLabels: true, useMaxWidth: false },
+    themeVariables: {
+      background: v("--surface"),
+      primaryColor: v("--surface-2"),
+      primaryTextColor: v("--ink"),
+      primaryBorderColor: v("--rule"),
+      secondaryColor: v("--surface"),
+      tertiaryColor: v("--surface"),
+      lineColor: v("--muted"),
+      textColor: v("--ink"),
+      mainBkg: v("--surface-2"),
+      nodeBorder: v("--rule"),
+      clusterBkg: "transparent",
+      clusterBorder: v("--accent"),
+      edgeLabelBackground: v("--surface"),
+      fontFamily: '"Source Sans 3", ui-sans-serif, system-ui, sans-serif',
+      fontSize: "13px"
+    }
+  });
+</script>
