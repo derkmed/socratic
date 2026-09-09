@@ -3,6 +3,7 @@
 Status: accepted
 Date: 2026-09-08
 Amended by: [ADR-0009](0009-self-explanation-probe.md)
+Extended by: [ADR-0018](0018-collected-records-on-disk.md)
 
 ## Decision
 
