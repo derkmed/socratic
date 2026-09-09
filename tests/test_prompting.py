@@ -32,9 +32,16 @@ from socratic.domain.types import Blank, BlankSegment, Option, Quiz, TextSegment
 
 PROMPTING_SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
 
-EXEMPT_FROM_PROFILE_SCAN = ("domain/prompting.py",)
-"""The module that owns the only reads, named by path relative to the package
-root rather than by filename — see #23 for the same fault in the mode scan."""
+EXEMPT_FROM_PROFILE_SCAN = ("domain/prompting.py", "domain/profile_builder.py")
+"""The two modules that own the profile, named by path relative to the package
+root rather than by filename — see #23 for the same fault in the mode scan.
+
+`prompting.py` is the sole **reader for rendering**; `profile_builder.py` (#16)
+is the sole **writer**, and cannot increment a ledger or fold a narrative
+forward without reading them. Those are the two ends the abstraction has always
+implied — a profile is written in one place and rendered in one place — and
+everything in between still reaches a profile through `render_profile` alone.
+"""
 
 PROFILE_INTERNALS = ("ledger", "narrative")
 """The shape-bearing fields the abstraction exists to hide.
