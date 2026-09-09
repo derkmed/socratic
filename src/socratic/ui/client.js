@@ -150,13 +150,13 @@ var SocraticQuiz = (function () {
           blank_id: blankId,
           submitted: submitted
         }).then(function (reply) {
-          applyGrade(blankId, reply);
+          applyGrade(blankId, submitted, reply);
           return reply;
         })
       );
     }
 
-    function applyGrade(blankId, reply) {
+    function applyGrade(blankId, submitted, reply) {
       var feedbackHtml = orNull(reply.feedback_html);
 
       var event = {
@@ -184,7 +184,16 @@ var SocraticQuiz = (function () {
 
       if (reply.blank_resolved) {
         resolved[blankId] = true;
-        view.resolveBlank(blankId);
+        /* What goes in the gap. The service sends no resolved text on a
+         * correct answer — there is no field for one — so it is what the
+         * learner got right, and on a rung-three reveal it is the revealed
+         * option instead, because what they submitted was wrong (ADR-0009).
+         * A finished quiz whose blanks are all empty is the "silent blank"
+         * master acceptance 31 forbids. */
+        view.resolveBlank({
+          blankId: blankId,
+          answer: event.revealedOptionId || submitted
+        });
         advance();
       }
       if (reply.probe) {
@@ -347,17 +356,30 @@ var SocraticQuiz = (function () {
       showHint: function (event) {
         paint(event, "incorrect");
       },
-      resolveBlank: function (blankId) {
-        var placeholder = placeholderFor(blankId);
+      resolveBlank: function (event) {
+        var placeholder = placeholderFor(event.blankId);
         if (placeholder) {
           placeholder.setAttribute("data-state", "resolved");
+          var option = root.querySelector(
+            '.socratic-option[data-option-id="' + event.answer + '"]'
+          );
+          if (option) {
+            /* The option's label, already sanitised in the service. */
+            setHtml(placeholder, option.innerHTML);
+          } else {
+            /* Free text the learner typed. Text, never markup: it is the one
+             * string in this document that did not come through the service's
+             * sanitiser. */
+            placeholder.textContent = event.answer;
+          }
         }
-        show(controlFor(blankId), false);
+        show(controlFor(event.blankId), false);
       },
       activateBlank: function (blankId) {
         var placeholder = placeholderFor(blankId);
         if (placeholder) {
           placeholder.setAttribute("data-state", "active");
+          placeholder.textContent = "";
         }
         show(controlFor(blankId), true);
       },
