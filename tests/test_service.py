@@ -914,7 +914,7 @@ def land_probe_questions(harness, session: str) -> None:
     written straight onto the stored attempt rather than fetched through
     `author_pedagogy`, because that call is unreachable for an
     HTTP-authored quiz today — it renders `quiz.mode.value`, and a mode that
-    arrived over the wire is the plain string `ModeKey` says it is (#75).
+    arrived over the wire is the plain string `ModeKey` says it is (#89).
     """
     attempt = harness.attempts.get_by_session(LEARNER, session)
     quiz = attempt.quiz
