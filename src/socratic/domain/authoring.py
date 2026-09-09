@@ -19,14 +19,18 @@ reaches the mode's `blank_range` through the registry, so the pedagogical bound
 is the registry's number rather than one restated here. An `if mode ==` outside
 the registry is a bug (CONTEXT: ModeRegistry).
 
-**One call, and only one** (D11,
-[ADR-0011](../../../docs/adr/0011-latency-budget.md)). The skeleton is the
-blocking call; the pedagogy payload that rides behind it is
-[#9](https://github.com/derkmed/socratic/issues/9) and is deliberately absent,
-so the skeleton response carries the whole blank shape the registry's
-`authoring_schema_fragment` already declares.
+**One blocking call, and only one** (D11,
+[ADR-0011](../../../docs/adr/0011-latency-budget.md)). `author` makes the
+skeleton call and returns a quiz that is already playable; `author_pedagogy`
+makes the second call and merges reinforcements, hint rungs and the recap into
+the **in-flight attempt**, which is where the learner's guesses are. Merging
+into the stored attempt rather than into the quiz the caller is holding is the
+guard the ADR asks for: a learner who answers inside the window loses nothing.
+A `direct_answer` fires no second call - there is no exercise to add pedagogy
+to, and no attempt to add it to.
 
-Spec: `docs/specs/quiz-authoring.md`.
+Spec: `docs/specs/skeleton-and-pedagogy-split.md`, after
+`docs/specs/quiz-authoring.md`.
 """
 
 from __future__ import annotations
@@ -70,6 +74,9 @@ deriving it from the assembled prompt is not this ticket's decision."""
 
 DIRECT_ANSWER = "direct_answer"
 QUIZ = "quiz"
+
+SKELETON_STAGE = registry_module.AuthoringStage.SKELETON
+COMPLETE_STAGE = registry_module.AuthoringStage.COMPLETE
 
 _TEXT = "text"
 _MATH = "math"
@@ -166,14 +173,12 @@ class QuizAuthoring:
             raise ValueError("an inquiry is required to author against")
         self._registry.policy_for(mode)
 
-        segments = _with_inquiry(
-            prompting.assemble(
-                prompting.CallType.AUTHOR_SKELETON,
-                profile=profile or prompting.LearnerProfile(learner_id=learner_id),
-                probe_cadence=probe_cadence,
-                quiz=None,
-            ),
-            inquiry,
+        segments = prompting.assemble(
+            prompting.CallType.AUTHOR_SKELETON,
+            profile=profile or prompting.LearnerProfile(learner_id=learner_id),
+            probe_cadence=probe_cadence,
+            quiz=None,
+            inquiry=inquiry,
         )
         response = self._model_client.author_skeleton(segments)
 
@@ -194,7 +199,7 @@ class QuizAuthoring:
             quiz_session_id=ids.new_quiz_session_id(clock=self._clock),
             mode=mode,
         )
-        validation.ensure_valid_quiz(quiz, self._registry)
+        validation.ensure_valid_quiz(quiz, self._registry, stage=SKELETON_STAGE)
         self._persist(
             quiz,
             learner_id=learner_id,
@@ -203,6 +208,91 @@ class QuizAuthoring:
             response=response,
         )
         return quiz
+
+    def author_pedagogy(
+        self,
+        quiz: Quiz,
+        learner_id: str,
+        *,
+        probe_cadence: ProbeCadence = ProbeCadence.SOMETIMES,
+        profile: prompting.LearnerProfile | None = None,
+    ) -> records.QuizAttempt:
+        """Fetch the pedagogy payload and merge it into the in-flight attempt.
+
+        The second of the two authoring calls (D11, ADR-0011). It is **not**
+        blocking: the caller fires it off the render path, and it lands while
+        the learner spends 30-60 seconds reading the explanation. Nothing here
+        is on the learner's critical path, which is why it is a separate entry
+        point rather than a tail of `author`.
+
+        **The merge target is the stored attempt, re-read after the call.**
+        That is the guard ADR-0011 asks for. A learner can answer inside the
+        window, and their guess is appended to the attempt by the submit path;
+        merging into the quiz this method was handed would write that guess
+        away again. Re-reading is also what makes the sealed case visible.
+
+        Args:
+          quiz: The quiz `author` returned. Rendered into segment 2, and its
+            session names the attempt to merge into.
+          learner_id: Whose partition the attempt lives in.
+          probe_cadence: The learner's setting. Never reaches the prompt
+            (ADR-0010); taken so that stays assertable.
+          profile: The profile rendered into segment 2, as for `author`.
+
+        Returns:
+          The attempt with the payload merged in - or unchanged, if it had
+          already sealed.
+
+        Raises:
+          KeyError: If the learner has no attempt for this quiz's session.
+          AuthoringParseError: If the payload cannot be read, or names a blank
+            the quiz does not declare.
+          QuizValidationError: If the merged quiz is still not a complete one.
+            Nothing is written, so the learner keeps the playable skeleton.
+        """
+        segments = prompting.assemble(
+            prompting.CallType.AUTHOR_PEDAGOGY,
+            profile=profile or prompting.LearnerProfile(learner_id=learner_id),
+            probe_cadence=probe_cadence,
+            quiz=quiz,
+        )
+        response = self._model_client.author_pedagogy(segments)
+
+        attempt = self._attempt_for(quiz, learner_id)
+        if attempt.is_sealed:
+            # Sealed means never written again (CONTEXT: Sealed), and pedagogy
+            # for blanks that are all resolved has no reader. Dropping it is
+            # the whole handling: a late payload is not an error.
+            return attempt
+
+        merged = _merge_pedagogy(attempt.quiz, _decode(response.content))
+        validation.ensure_valid_quiz(merged, self._registry, stage=COMPLETE_STAGE)
+        merged_attempt = dataclasses.replace(
+            attempt.with_model_call(
+                _call_record(prompting.CallType.AUTHOR_PEDAGOGY, response)
+            ),
+            quiz=merged,
+        )
+        self._attempts.save(merged_attempt)
+        return merged_attempt
+
+    def _attempt_for(self, quiz: Quiz, learner_id: str) -> records.QuizAttempt:
+        """The in-flight attempt for this quiz's session.
+
+        Found by scanning the learner's partition, because that is what
+        `AttemptRepository` offers: it is keyed by attempt id, and the session
+        is deliberately a different key (ADR-0007). A learner has a handful of
+        attempts, so the scan costs nothing here; a store that grows past that
+        wants an index, which is the persistence port's problem and not this
+        path's.
+        """
+        for attempt in self._attempts.list_for_learner(learner_id):
+            if attempt.session_id == quiz.quiz_session_id:
+                return attempt
+        raise KeyError(
+            f"no attempt for session {quiz.quiz_session_id!r} in "
+            f"{learner_id!r}'s partition"
+        )
 
     def _persist(
         self,
@@ -235,57 +325,8 @@ class QuizAuthoring:
             effort=self._effort,
             prompt_version=self._prompt_version,
             queued_topics=quiz.queued_topics,
-        ).with_model_call(
-            records.ModelCallRecord(
-                call_type=prompting.CallType.AUTHOR_SKELETON.value,
-                message_id=response.message_id,
-                usage=_usage(response),
-            )
-        )
+        ).with_model_call(_call_record(prompting.CallType.AUTHOR_SKELETON, response))
         self._attempts.save(attempt)
-
-
-def _usage(response: model_client_module.ModelResponse) -> records.TokenUsage:
-    """The call's token usage, as far as the port reports it.
-
-    `ModelResponse` carries the two cache counters and nothing else today, so
-    the plain input and output counts are zero until the Anthropic adapter
-    ([#7](https://github.com/derkmed/socratic/issues/7)) has somewhere to put
-    them. The cache counters are the ones the build gate reads, so what matters
-    for acceptance 12 is already here.
-    """
-    return records.TokenUsage(
-        input_tokens=0,
-        output_tokens=0,
-        cache_creation_input_tokens=response.cache_creation_input_tokens,
-        cache_read_input_tokens=response.cache_read_input_tokens,
-    )
-
-
-def _with_inquiry(
-    segments: prompting.PromptSegments, inquiry: str
-) -> prompting.PromptSegments:
-    """Put the inquiry at the head of the volatile tail.
-
-    `assemble` takes no `inquiry` parameter — its tail is shaped for the
-    grading calls, which carry guesses rather than a question — so the
-    authoring path adds it here rather than reaching into `prompting.py`. The
-    tail is the right place regardless: the inquiry is per-request, so it must
-    sit below the last cache breakpoint.
-    """
-    tail = segments.volatile_tail
-    amended = dataclasses.replace(
-        tail, text=f"## The learner's inquiry\n  {inquiry}\n{tail.text}"
-    )
-    return dataclasses.replace(
-        segments,
-        segments=tuple(
-            amended
-            if segment.role is prompting.SegmentRole.VOLATILE_TAIL
-            else segment
-            for segment in segments.segments
-        ),
-    )
 
 
 # --- Parsing -----------------------------------------------------------------
@@ -378,6 +419,11 @@ def _parse_quiz(
     references. Those are malformed authoring responses like any other, so they
     surface as `AuthoringParseError` rather than as a `ValueError` from inside
     a dataclass the caller never named.
+
+    The **recap is optional here** and defaults to `""`: it rides the pedagogy
+    payload (ADR-0011), so a skeleton response is not malformed for omitting
+    one. Optional rather than forbidden - a skeleton that carries one anyway is
+    kept, and the empty recap is what the complete-stage validator refuses.
     """
     where = "the authored quiz"
     explanation = _parse_explanation(
@@ -394,7 +440,7 @@ def _parse_quiz(
             topic=_require(payload, "topic", str, where),
             explanation=explanation,
             blanks=blanks,
-            recap=_require(payload, "recap", str, where),
+            recap=_optional(payload, "recap", str, where) or "",
             queued_topics=_strings(payload, "queued_topics", where),
         )
     except ValueError as error:
@@ -494,3 +540,90 @@ def _parse_options(
             )
         )
     return tuple(parsed)
+
+
+def _call_record(
+    call_type: prompting.CallType,
+    response: model_client_module.ModelResponse,
+) -> records.ModelCallRecord:
+    """One call, stamped for the attempt.
+
+    Both authoring calls go through here, so both `message_id`s and both token
+    counts land on the attempt the same way. The usage comes from
+    `ModelResponse.token_usage()` rather than being reassembled counter by
+    counter - there is one mapping to get wrong and it belongs to the port.
+    """
+    return records.ModelCallRecord(
+        call_type=call_type.value,
+        message_id=response.message_id,
+        usage=response.token_usage(),
+    )
+
+
+def _merge_pedagogy(quiz: Quiz, payload: Mapping[str, Any]) -> Quiz:
+    """Fold the pedagogy payload into the skeleton.
+
+    Additive by construction: the payload carries only fields the skeleton
+    left empty, so nothing the learner is already looking at moves. A blank
+    the payload says nothing about keeps its absent pedagogy and is caught by
+    the complete-stage validator, which is where that judgement belongs.
+
+    Args:
+      quiz: The skeleton as stored on the attempt.
+      payload: The decoded `author_pedagogy` response.
+
+    Returns:
+      The merged quiz. Not validated here - the caller does that at
+      `COMPLETE`, in one place, through the registry.
+
+    Raises:
+      AuthoringParseError: If the payload is malformed, or names a blank the
+        quiz does not declare. An unknown blank id is the symptom of the two
+        calls having drifted apart, and merging around it silently would leave
+        a blank with no hints and no explanation of why.
+    """
+    where = "the pedagogy payload"
+    entries = _pedagogy_entries(payload, quiz, where)
+    return dataclasses.replace(
+        quiz,
+        recap=_require(payload, "recap", str, where),
+        blanks=tuple(
+            _with_pedagogy(blank, entries.get(blank.blank_id)) for blank in quiz.blanks
+        ),
+    )
+
+
+def _pedagogy_entries(
+    payload: Mapping[str, Any],
+    quiz: Quiz,
+    where: str,
+) -> dict[str, Mapping[str, Any]]:
+    """The payload's per-blank entries, keyed by blank id."""
+    declared = {blank.blank_id for blank in quiz.blanks}
+    entries: dict[str, Mapping[str, Any]] = {}
+    for entry in _optional(payload, "blanks", list, where) or ():
+        if not isinstance(entry, dict):
+            raise AuthoringParseError(
+                f"{where}: a blank is a {type(entry).__name__}, not an object"
+            )
+        blank_id = _require(entry, "blank_id", str, where)
+        if blank_id not in declared:
+            raise AuthoringParseError(
+                f"{where} names blank {blank_id!r}, which the quiz does not "
+                f"declare; it has {sorted(declared)}"
+            )
+        entries[blank_id] = entry
+    return entries
+
+
+def _with_pedagogy(blank: Blank, entry: Mapping[str, Any] | None) -> Blank:
+    """One blank, with its reinforcement and hint ladder filled in."""
+    if entry is None:
+        return blank
+    where = f"the pedagogy for blank {blank.blank_id!r}"
+    hints = _optional(entry, "hints", list, where)
+    return dataclasses.replace(
+        blank,
+        reinforcement=_optional(entry, "reinforcement", str, where),
+        hints=None if hints is None else tuple(_hint(hint, where) for hint in hints),
+    )

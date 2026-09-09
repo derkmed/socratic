@@ -14,6 +14,15 @@ and `validate_quiz` reaches them through the registry, so validation branches on
 mode in exactly one place and a hypothetical third difficulty mode is still one
 registry entry (spec acceptance 39).
 
+**Validation happens at a stage** (issue #9, D11). Authoring is two calls, so a
+blank is admissible at two different moments and "valid" alone does not say
+which is meant: a Novice blank with no hints is a fine *skeleton* and an
+inadmissible *finished* quiz. `stage` selects which rules the mode is asked
+for, through `ModePolicy.rules_for`, and defaults to `COMPLETE` - which is what
+every caller that predates the split already meant. The stage relaxes nothing
+on its own: `COMPLETE` is composed of the per-stage rules, so a rule dropped
+from a stage is a rule dropped in plain sight.
+
 **Two bounds, two independent rejections** (spec acceptance 25). The mode's
 `blank_range` rejects first - it is the pedagogical bound, Novice 1-2 and
 Advanced 4-6, and it is the one an author should ever meet. `STORAGE_BLANK_CAP`
@@ -55,6 +64,8 @@ class QuizValidationError(ValueError):
 def validate_quiz(
     quiz: Quiz,
     registry: registry_module.ModeRegistry | None = None,
+    *,
+    stage: registry_module.AuthoringStage = registry_module.AuthoringStage.COMPLETE,
 ) -> tuple[str, ...]:
     """Report everything inadmissible about `quiz` - empty when it is fine.
 
@@ -64,10 +75,14 @@ def validate_quiz(
         re-checked here.
       registry: Where the per-mode rules come from. Defaults to
         `default_registry()`.
+      stage: How far through authoring the quiz is. `SKELETON` asks only for
+        what the blocking call authors; `COMPLETE`, the default, asks for
+        everything a finished quiz needs.
 
     Returns:
       The reasons the quiz is inadmissible, in order: the two bounds first,
-      then one entry per problem per blank, each prefixed with its `blank_id`.
+      then the quiz-level completeness rules, then one entry per problem per
+      blank, each prefixed with its `blank_id`.
 
     Raises:
       KeyError: If no policy is registered for the quiz's mode. An unregistered
@@ -80,8 +95,10 @@ def validate_quiz(
 
     errors: list[str] = []
     errors.extend(_bound_errors(quiz, policy.blank_range))
+    errors.extend(_recap_errors(quiz, stage))
+    validate_blank = policy.rules_for(stage).validate_blank
     for blank in quiz.blanks:
-        for error in _blank_errors(blank, quiz, policy):
+        for error in _blank_errors(blank, quiz, validate_blank):
             errors.append(f"{blank.blank_id}: {error}")
     return tuple(errors)
 
@@ -89,6 +106,8 @@ def validate_quiz(
 def ensure_valid_quiz(
     quiz: Quiz,
     registry: registry_module.ModeRegistry | None = None,
+    *,
+    stage: registry_module.AuthoringStage = registry_module.AuthoringStage.COMPLETE,
 ) -> Quiz:
     """Return `quiz` if it is admissible, else raise.
 
@@ -98,7 +117,7 @@ def ensure_valid_quiz(
     Raises:
       QuizValidationError: Carrying every problem found.
     """
-    errors = validate_quiz(quiz, registry)
+    errors = validate_quiz(quiz, registry, stage=stage)
     if errors:
         raise QuizValidationError(errors)
     return quiz
@@ -123,13 +142,38 @@ def _bound_errors(
     return tuple(errors)
 
 
+_STAGES_NEEDING_A_RECAP = frozenset({registry_module.AuthoringStage.COMPLETE})
+"""The recap rides the pedagogy payload, so only a merged quiz owes one.
+
+A frozenset rather than a comparison so the rule reads as a property of the
+stage, and so adding a stage that also needs one is an entry rather than an
+edit to a condition.
+"""
+
+
+def _recap_errors(
+    quiz: Quiz,
+    stage: registry_module.AuthoringStage,
+) -> tuple[str, ...]:
+    """The one quiz-level completeness rule.
+
+    Without it a mode with no per-blank pedagogy - Advanced, whose feedback is
+    the reactive tutor line on the grading response (ADR-0013) - would have
+    nothing at all that `COMPLETE` checks, and an empty pedagogy payload could
+    merge and be called finished.
+    """
+    if stage not in _STAGES_NEEDING_A_RECAP or quiz.recap.strip():
+        return ()
+    return ("the quiz has no recap",)
+
+
 def _blank_errors(
     blank,
     quiz: Quiz,
-    policy: registry_module.ModePolicy,
+    validate_blank: registry_module.BlankValidator,
 ) -> tuple[str, ...]:
-    """One blank's problems, from the policy - or the mode disagreement that
-    stops the policy being asked at all.
+    """One blank's problems, from the stage's validator - or the mode
+    disagreement that stops the validator being asked at all.
 
     One attempt, one mode (CONTEXT: Mode toggle), so a blank carrying a
     different mode from its quiz is inadmissible. It is caught here rather than
@@ -138,4 +182,4 @@ def _blank_errors(
     """
     if blank.mode != quiz.mode:
         return (f"mode {blank.mode!r} does not match the quiz's {quiz.mode!r}",)
-    return policy.validate_blank(blank)
+    return validate_blank(blank)
