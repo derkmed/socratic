@@ -558,6 +558,58 @@ class TestThePromptItAssembles:
 
         assert LEARNER in client.calls[0].segments.segment_2.text
 
+    def test_the_modes_blank_bound_reaches_segment_2(self):
+        # #72: the bound cannot ride the schema fragment — array-count keywords
+        # are outside the structured-output subset — so the prompt has to say
+        # it, and segment 2 is the only position ADR-0006 leaves open.
+        _, novice_client, _ = author(quiz_payload())
+        assert "1 and 2" in novice_client.calls[0].segments.segment_2.text
+
+        _, advanced_client, _ = author(
+            quiz_payload(
+                ("b1", "b2", "b3", "b4"), blank_builder=advanced_blank_payload
+            ),
+            mode=DifficultyMode.ADVANCED,
+        )
+        assert "4 and 6" in advanced_client.calls[0].segments.segment_2.text
+
+    def test_the_bound_is_the_registrys_and_not_a_hardcoded_number(self):
+        # Same argument as TestTheBlankRangeComesFromTheRegistry: a registry
+        # saying 3-5 must produce 3-5 in the prompt, or the number was baked in
+        # somewhere other than the mode policy.
+        registry = ModeRegistry(
+            {
+                DifficultyMode.NOVICE: ModePolicy(
+                    authoring_schema_fragment=NOVICE_POLICY.authoring_schema_fragment,
+                    grading_strategy=NOVICE_POLICY.grading_strategy,
+                    validate_blank=NOVICE_POLICY.validate_blank,
+                    render_hint=NOVICE_POLICY.render_hint,
+                    blank_range=BlankRange(3, 5),
+                    probe_failure_behavior=NOVICE_POLICY.probe_failure_behavior,
+                )
+            }
+        )
+
+        _, client, _ = author(quiz_payload(("b1", "b2", "b3")), registry=registry)
+
+        assert "3 and 5" in client.calls[0].segments.segment_2.text
+
+    def test_the_bound_never_reaches_segment_1(self):
+        # It varies by mode, and segment 1 is one cache prefix for the whole
+        # workspace (ADR-0006).
+        _, novice_client, _ = author(quiz_payload())
+        _, advanced_client, _ = author(
+            quiz_payload(
+                ("b1", "b2", "b3", "b4"), blank_builder=advanced_blank_payload
+            ),
+            mode=DifficultyMode.ADVANCED,
+        )
+
+        assert (
+            novice_client.calls[0].segments.segment_1.text
+            == advanced_client.calls[0].segments.segment_1.text
+        )
+
 
 class TestGuards:
     def test_an_empty_inquiry_is_refused_before_the_model_is_consulted(self):
