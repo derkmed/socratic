@@ -49,14 +49,16 @@ def _blank(index: int) -> Blank:
     )
 
 
-def _quiz(blank_count: int = 2) -> Quiz:
+def _quiz(blank_count: int = 2, session_id: str | None = None) -> Quiz:
+    # `session_id` is how a test builds the *same* session's quiz again - what
+    # the pedagogy merge does. Left out, the quiz mints a session of its own.
     blanks = tuple(_blank(index) for index in range(1, blank_count + 1))
     explanation: list = [TextSegment("Heat flows because ")]
     for blank in blanks:
         explanation.append(BlankSegment(blank.blank_id))
         explanation.append(TextSegment(" rises."))
     return Quiz(
-        quiz_session_id=str(Ulid.mint()),
+        quiz_session_id=session_id or str(Ulid.mint()),
         mode=DifficultyMode.NOVICE,
         topic="the second law",
         explanation=tuple(explanation),
@@ -66,11 +68,16 @@ def _quiz(blank_count: int = 2) -> Quiz:
 
 
 def _attempt(**overrides) -> QuizAttempt:
+    # The attempt and its quiz name one session, so the helper threads the
+    # quiz's own id through rather than minting a second one. Pass `quiz=` to
+    # choose the session; pass `session_id=` on top of it to break the
+    # agreement deliberately.
+    quiz = overrides.pop("quiz", None) or _quiz()
     fields = dict(
         attempt_id=str(Ulid.mint()),
         learner_id="learner-1",
-        session_id=str(Ulid.mint()),
-        quiz=_quiz(),
+        session_id=quiz.quiz_session_id,
+        quiz=quiz,
         mode=DifficultyMode.NOVICE,
         topic="the second law",
         created_at=AT,
@@ -280,6 +287,31 @@ class TestQuizAttempt:
         with pytest.raises(ValueError, match="unknown blank"):
             _attempt().with_probe(_probe("b99"))
 
+    def test_with_quiz_swaps_the_quiz_and_leaves_the_previous_record_untouched(
+        self,
+    ):
+        # The pedagogy merge (#9) needs this write; before #46 it reached for
+        # `dataclasses.replace` and so went round `_refuse_if_sealed`.
+        attempt = _attempt()
+        merged = _quiz(session_id=attempt.session_id)
+        swapped = attempt.with_quiz(merged)
+        assert swapped.quiz is merged
+        assert attempt.quiz is not merged
+
+    def test_with_quiz_keeps_the_guesses_already_recorded(self):
+        attempt = _attempt().with_guess(_guess())
+        assert (
+            attempt.with_quiz(_quiz(session_id=attempt.session_id)).guesses
+            == attempt.guesses
+        )
+
+    def test_with_quiz_rejects_a_quiz_that_drops_a_guessed_blank(self):
+        # The record's own invariants run again on the swap, so a merge that
+        # loses a blank cannot orphan the guesses that name it.
+        attempt = _attempt().with_guess(_guess("b2"))
+        with pytest.raises(ValueError, match="unknown blank"):
+            attempt.with_quiz(_quiz(1, session_id=attempt.session_id))
+
     def test_the_anthropic_message_ids_and_usage_are_kept_per_call(self):
         # D7 / ADR-0007: the message.id list is the audit link from a stored
         # quiz back to the exact API calls behind it.
@@ -358,6 +390,59 @@ class TestSealing:
         with pytest.raises(ValueError, match="sealed"):
             sealed.with_probe(_probe())
 
+    def test_a_sealed_attempt_cannot_have_its_quiz_replaced(self):
+        # #46: the write the pedagogy merge needs, refused like every other.
+        sealed = _attempt().sealed(LATER)
+        with pytest.raises(ValueError, match="sealed"):
+            sealed.with_quiz(_quiz())
+
+    def test_every_with_method_on_the_record_refuses_a_sealed_attempt(self):
+        # The structural half of #46. A `with_*` sibling added later without
+        # `_refuse_if_sealed` fails here; one added without an entry in this
+        # table fails here too, so the guard cannot be forgotten quietly.
+        arguments = {
+            "with_guess": _guess(),
+            "with_probe": _probe(),
+            "with_model_call": ModelCallRecord(
+                call_type="author_pedagogy",
+                message_id="msg_01pedagogy",
+                usage=TokenUsage(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+            ),
+            "with_quiz": _quiz(),
+        }
+        mutators = {
+            name
+            for name in dir(QuizAttempt)
+            if name.startswith("with_") and callable(getattr(QuizAttempt, name))
+        }
+        assert mutators == set(arguments)
+
+        sealed = _attempt().sealed(LATER)
+        for name, argument in arguments.items():
+            with pytest.raises(ValueError, match="sealed"):
+                getattr(sealed, name)(argument)
+
+    def test_a_sealed_attempt_is_still_reconstructible_field_for_field(self):
+        # Deliberate, and the reason the `dataclasses.replace` route stays
+        # advisory rather than structural (#46): a repository materialising a
+        # stored document rebuilds a sealed attempt through `__init__`, and
+        # `__post_init__` cannot tell that apart from a caller rebuilding one
+        # with fresh content. Refusing sealed reconstruction would break
+        # persistence, `sealed()` and `abandoned()` alike.
+        sealed = _attempt().with_guess(_guess()).sealed(LATER)
+        rebuilt = QuizAttempt(
+            **{
+                field.name: getattr(sealed, field.name)
+                for field in dataclasses.fields(sealed)
+            }
+        )
+        assert rebuilt == sealed
+
     def test_displacement_marks_the_attempt_abandoned(self):
         # ADR-0005 / CONTEXT Outcome: `abandoned` is written only on
         # displacement. We never guess that a learner left.
@@ -372,6 +457,70 @@ class TestSealing:
     def test_an_in_flight_attempt_cannot_carry_a_sealed_at(self):
         with pytest.raises(ValueError, match="sealed_at"):
             _attempt(sealed_at=LATER)
+
+
+class TestSessionAgreement:
+    """The attempt and its quiz name one session (ADR-0007, issue #58).
+
+    `session_id` stays a stored field because it is part of ADR-0005's
+    persisted document; what the record adds is the invariant that the stored
+    copy never drifts from the quiz's own `quiz_session_id`. The lookup path -
+    `authoring._attempt_for`, and the session index a repository builds off
+    `attempt.session_id` - depends on the two agreeing, and a disagreement
+    surfaces there as a `KeyError` on an attempt that is sitting in the
+    partition rather than as a wrong answer.
+    """
+
+    def test_an_attempt_naming_another_session_than_its_quiz_is_rejected(self):
+        with pytest.raises(ValueError, match="one session"):
+            _attempt(session_id=str(Ulid.mint()), quiz=_quiz())
+
+    def test_the_error_names_both_sessions(self):
+        quiz = _quiz()
+        stray = str(Ulid.mint())
+        with pytest.raises(ValueError) as caught:
+            _attempt(session_id=stray, quiz=quiz)
+        assert stray in str(caught.value)
+        assert quiz.quiz_session_id in str(caught.value)
+
+    def test_replace_cannot_move_the_attempt_to_another_session(self):
+        # `dataclasses.replace` re-runs __post_init__, so the record's own
+        # rewrite path is guarded like construction is.
+        attempt = _attempt()
+        with pytest.raises(ValueError, match="one session"):
+            dataclasses.replace(attempt, session_id=str(Ulid.mint()))
+
+    def test_with_quiz_refuses_a_quiz_naming_another_session(self):
+        # The route #57 opened: with_quiz swaps a quiz onto the attempt, and
+        # the incoming quiz carries a session of its own.
+        attempt = _attempt()
+        with pytest.raises(ValueError, match="one session"):
+            attempt.with_quiz(_quiz())
+
+    def test_with_quiz_admits_the_pedagogy_merge_shape(self):
+        # What `authoring.author_pedagogy` actually does: the merged quiz is
+        # derived from the stored one, so it keeps the same session.
+        attempt = _attempt()
+        merged = dataclasses.replace(
+            attempt.quiz, recap="Entropy never decreases, ever."
+        )
+        swapped = attempt.with_quiz(merged)
+        assert swapped.quiz.recap == "Entropy never decreases, ever."
+        assert swapped.session_id == swapped.quiz.quiz_session_id
+
+    def test_an_agreeing_attempt_is_admitted(self):
+        quiz = _quiz()
+        attempt = _attempt(session_id=quiz.quiz_session_id, quiz=quiz)
+        assert attempt.session_id == quiz.quiz_session_id
+
+    def test_sealing_and_abandoning_preserve_the_agreement(self):
+        attempt = _attempt()
+        for closed in (attempt.sealed(LATER), attempt.abandoned(LATER)):
+            assert closed.session_id == closed.quiz.quiz_session_id
+
+    def test_the_event_writes_preserve_the_agreement(self):
+        attempt = _attempt().with_guess(_guess()).with_probe(_probe())
+        assert attempt.session_id == attempt.quiz.quiz_session_id
 
 
 class TestBounds:

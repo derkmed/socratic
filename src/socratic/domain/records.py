@@ -201,6 +201,16 @@ class QuizAttempt:
     Holds the raw unfilled quiz exactly as authored plus two ordered
     collections, `guesses` and `probes`, which a reader merges by timestamp when
     it wants a timeline.
+
+    **Write through the `with_*` methods, never `dataclasses.replace`.** Each
+    one refuses a sealed attempt (CONTEXT: Sealed); `dataclasses.replace` goes
+    straight to `__init__` and so goes round that guard without complaining.
+    The guard cannot be moved into `__post_init__`, because reconstructing a
+    sealed attempt field-for-field is exactly what a repository does when it
+    materialises a stored document, and `__post_init__` sees only the value it
+    is handed - it has no way to tell that apart from a caller rebuilding a
+    sealed attempt with new content. So `dataclasses.replace` on this record is
+    discouraged here rather than blocked there.
     """
 
     attempt_id: str
@@ -229,6 +239,12 @@ class QuizAttempt:
             raise ValueError(
                 f"an attempt is keyed by a ULID: {self.attempt_id!r} ({error})"
             ) from None
+
+        if self.session_id != self.quiz.quiz_session_id:
+            raise ValueError(
+                f"an attempt and its quiz name one session: "
+                f"{self.session_id!r} against {self.quiz.quiz_session_id!r}"
+            )
 
         if len(self.quiz.blanks) > MAX_BLANKS:
             raise ValueError(
@@ -306,6 +322,17 @@ class QuizAttempt:
     def with_model_call(self, call: ModelCallRecord) -> "QuizAttempt":
         self._refuse_if_sealed("record a model call against")
         return dataclasses.replace(self, model_calls=(*self.model_calls, call))
+
+    def with_quiz(self, quiz: Quiz) -> "QuizAttempt":
+        """Swap in a quiz the authoring path has merged into (D11, ADR-0011).
+
+        The pedagogy payload lands on the quiz rather than on the guess or
+        probe collections, so it is the one write with no natural home among
+        the three above. The record's invariants run again on the swap, so a
+        merge that dropped a blank a guess names is rejected here.
+        """
+        self._refuse_if_sealed("replace the quiz on")
+        return dataclasses.replace(self, quiz=quiz)
 
     def sealed(self, at: datetime) -> "QuizAttempt":
         """Close the attempt as resolved.
