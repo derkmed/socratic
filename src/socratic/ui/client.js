@@ -34,11 +34,37 @@ var SocraticQuiz = (function () {
 
   var CORRECT = "correct";
 
-  /* The two strings a reveal puts on screen. Wording, not decision: what a
-   * reveal *is* is settled in the state machine, and these are the only words
-   * the DOM half chooses for itself beyond the verdict line. */
+  /* What a reveal puts on screen. The gap's marker is handed to the view on
+   * the event, and the note is composed by a function the tests can call:
+   * "the gap says something" and "the note shows on every reveal" are the two
+   * decisions #112's remedy consists of, and `createDomView` has no tests to
+   * hold either of them (#128 review). */
   var SEE_THE_NOTE = "— see the note";
   var CARRY_ON = "You can now continue with these answers in mind.";
+  var NO_ANSWER_NAMED = "The tutor did not name the answer for this one.";
+
+  /* The note's text on a rung-three close.
+   *
+   * Args:
+   *   optionHtml: The revealed option's label, already sanitised in the
+   *     service, or null where the reveal carries no option id.
+   *   hasFeedback: Whether the verdict panel's feedback block has anything in
+   *     it. Where the reveal is prose, that block is where it landed.
+   *
+   * Returns:
+   *   Inline HTML for the note. The option clause is punctuated here because
+   *   `payloads.label_html` renders a bare phrase with no terminator (#98).
+   *   With no option id and no feedback nothing on screen names the answer —
+   *   a hint dropped for reproducing the key leaves `feedback` null — so the
+   *   note says that, rather than telling the learner to carry on with an
+   *   answer they were never given.
+   */
+  function revealNote(optionHtml, hasFeedback) {
+    if (optionHtml) {
+      return "The answer: " + optionHtml + ". " + CARRY_ON;
+    }
+    return hasFeedback ? CARRY_ON : NO_ANSWER_NAMED;
+  }
 
   /* --- The transport ------------------------------------------------------ */
 
@@ -206,7 +232,10 @@ var SocraticQuiz = (function () {
          * blank" is still not what a finished quiz shows. */
         view.resolveBlank({
           blankId: blankId,
-          answer: event.reveal ? null : submitted
+          answer: event.reveal ? null : submitted,
+          /* The words a closed gap shows, chosen here rather than in the DOM
+           * half so that "it is not empty" is a decision under test. */
+          closedText: event.reveal ? SEE_THE_NOTE : null
         });
         advance();
       }
@@ -368,7 +397,7 @@ var SocraticQuiz = (function () {
           : null;
         setHtml(
           reveal,
-          (option ? "The answer: " + option.innerHTML + " " : "") + CARRY_ON
+          revealNote(option ? option.innerHTML : null, event.feedbackHtml !== null)
         );
       }
       show(reveal, Boolean(event.reveal));
@@ -390,7 +419,7 @@ var SocraticQuiz = (function () {
              * rather than an empty span, so the finished quiz still has no
              * silent blank in it. */
             placeholder.setAttribute("data-state", "closed");
-            placeholder.textContent = SEE_THE_NOTE;
+            placeholder.textContent = event.closedText;
           } else {
             placeholder.setAttribute("data-state", "resolved");
             var option = root.querySelector(
@@ -433,6 +462,14 @@ var SocraticQuiz = (function () {
       },
       probeGraded: function (event) {
         setHtml(verdict.querySelector(".socratic-feedback"), event.correctionHtml);
+        /* The correction replaces the feedback and nothing else, so without
+         * this the reveal, the tutor line and the pending notice from whatever
+         * was last graded stay on screen underneath it — a probe can be
+         * answered long after the learner has moved on to another blank (#128
+         * review). Only `paint` sets them, and it does not run here. */
+        show(verdict.querySelector(".socratic-reveal"), false);
+        setHtml(verdict.querySelector(".socratic-tutor-line"), null);
+        show(verdict.querySelector(".socratic-pedagogy-pending"), false);
         if (event.blankReopened) {
           this.activateBlank(event.blankId);
         }
@@ -538,6 +575,7 @@ var SocraticQuiz = (function () {
 
   return {
     createFetchTransport: createFetchTransport,
+    revealNote: revealNote,
     createQuizClient: createQuizClient,
     createDomView: createDomView,
     mount: mount

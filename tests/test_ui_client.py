@@ -468,6 +468,44 @@ class TestTheVerdict:
         assert only(emitted, "resolveBlank")["args"][0]["blankId"] == "b1"
         assert only(emitted, "activateBlank")["args"][0] == "b2"
 
+    def test_a_closed_gap_is_told_what_to_say(self):
+        """Master acceptance 31 is "no silent blanks", and a gap that asserts
+        nothing must still not be empty. The text is the state machine's to
+        supply for exactly that reason: the DOM half has no tests, so a marker
+        chosen there could be emptied and the suite would stay green (#128
+        review)."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'enthalpy');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                revealed_option_id=None,
+                blank_resolved=True,
+            )
+        )
+
+        closed_text = only(emitted, "resolveBlank")["args"][0]["closedText"]
+        assert isinstance(closed_text, str)
+        assert closed_text.strip()
+
+    def test_a_gap_the_learner_earned_is_told_nothing_to_say(self):
+        """The marker is for a close the learner did not earn. A correct answer
+        fills the gap with the answer itself and needs no stand-in."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o1');
+            emit({});
+            """
+            % graded()
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["closedText"] is None
+
     def test_a_wrong_answer_that_leaves_the_blank_open_resolves_nothing(self):
         """Rungs one and two say nothing about the gap; the blank is still the
         learner's to answer."""
@@ -534,6 +572,63 @@ class TestTheVerdict:
         )
 
         assert only(emitted, "showHint")["args"][0]["reveal"] is False
+
+
+class TestTheRevealNote:
+    """The note is the whole disclosure on a rung-three close, because the gap
+    no longer carries any of it (#112). Composing it is a decision, so it is a
+    pure function on the module rather than a line inside `createDomView` —
+    which has no tests, being binding only."""
+
+    def test_it_names_the_option_where_there_is_one(self):
+        emitted = run_js(
+            """
+            emit({ note: SocraticQuiz.revealNote('entropy', true) });
+            """
+        )
+
+        assert emitted["note"].startswith("The answer: entropy.")
+
+    def test_the_option_clause_is_a_finished_sentence(self):
+        """`payloads.label_html` renders a bare phrase with no terminator
+        (#98), so the note has to punctuate it or the two sentences run
+        together (#128 review)."""
+        note = run_js("emit({ note: SocraticQuiz.revealNote('entropy', true) });")[
+            "note"
+        ]
+
+        assert "entropy You can" not in note
+        assert "entropy. You can" in note
+
+    def test_a_prose_reveal_leaves_the_answer_to_the_feedback_above_it(self):
+        """No option id means the reveal is prose, and it arrives in the
+        feedback block directly above the note. The note does not repeat it —
+        it has no way to."""
+        emitted = run_js(
+            """
+            emit({ note: SocraticQuiz.revealNote(null, true) });
+            """
+        )
+
+        assert "The answer:" not in emitted["note"]
+        assert emitted["note"].strip()
+
+    def test_a_reveal_that_names_no_answer_anywhere_says_so(self):
+        """A hint dropped for reproducing the key leaves `feedback` null
+        (`_safe_hint`), so on a prose reveal nothing on screen names the
+        answer. The note says that rather than sending the learner to look for
+        something that is not there (#128 review)."""
+        emitted = run_js(
+            """
+            emit({
+              silent: SocraticQuiz.revealNote(null, false),
+              spoken: SocraticQuiz.revealNote(null, true)
+            });
+            """
+        )
+
+        assert emitted["silent"].strip()
+        assert emitted["silent"] != emitted["spoken"]
 
 
 class TestTheLatePedagogyWindow:

@@ -33,7 +33,9 @@ block alone — and it closes by telling the learner they can carry on.
 | `applyGrade` in `client.js` | existing | The state machine that decides what the view is told. `tests/test_ui_client.py` drives it in a child Node interpreter with a recording view, which is where every other client decision is asserted. |
 | The grade event handed to `celebrate` / `showHint` | existing | Already carries `rung`, `revealedOptionId` and `pedagogyPending`. Whether this response is the reveal is one more decision that belongs here rather than in the DOM half. |
 | `view.resolveBlank({blankId, answer})` | existing | Already the one call that says what goes in a gap. `answer: null` is the new "nothing goes in it", and the tests read the argument. |
-| `createDomView` and `overlay.css` | existing, untested by design | Binding only. The client's tests run in Node with no DOM and no dependency to give it one, so the marker's wording and the closed state's styling are asserted nowhere — same as every other line of `createDomView`. Kept decision-free so that stays honest. |
+| `revealNote(optionHtml, hasFeedback)` on the module | **new**, small | Composing the note is a decision — whether the answer is named, and what is said when nothing names it — and `createDomView` has no tests to hold one. A pure function beside `createFetchTransport`, which the module already exports for exactly this reason, puts it back in the Node harness. |
+| The `closedText` on the `resolveBlank` event | existing | What a closed gap says is the other half of #112's remedy, and master acceptance 31 rests on it being non-empty. Chosen in the state machine and handed over, so a test can see it. |
+| `createDomView` and `overlay.css` | existing, untested by design | Binding only, and now genuinely so: it renders the marker it is handed and the note the function composed. The client's tests run in Node with no DOM and no dependency to give it one, so the closed state's styling and the note's placement are still asserted nowhere. |
 
 No new wire field, no schema change, no model output: the service already sends
 everything this needs.
@@ -74,12 +76,19 @@ In order, one seam at a time.
    correct close and `null` on a reveal, replacing `revealedOptionId ||
    submitted`. The `revealedOptionId` fallback disappears with it.
 3. **The view renders the closed state.** A `null` answer sets
-   `data-state="closed"` and the fixed marker; `overlay.css` gains a rule for
-   it, muted against the resolved state's accent.
+   `data-state="closed"` and writes the event's `closedText`; `overlay.css`
+   gains a rule for it, muted against the resolved state's accent.
 4. **The note shows on every reveal.** `paint` shows `.socratic-reveal` when
-   `event.reveal`, not only when there is an option id, and closes it with the
-   line telling the learner to continue. With an option id it still names the
-   option; without one the answer is in the feedback prose directly above.
+   `event.reveal`, not only when there is an option id, and fills it from
+   `revealNote`. With an option id the note names the option — punctuated, so
+   the clause and the line that follows it are two sentences — and without one
+   the answer is in the feedback prose directly above. Where there is neither,
+   the note says the answer was not named rather than telling the learner to
+   carry on with one they never got.
+5. **A probe correction clears what it does not replace.** `probeGraded` writes
+   the feedback block only, so the reveal, the tutor line and the pending
+   notice from whatever was graded last are hidden alongside it. A probe can be
+   answered after the learner has moved on to another blank.
 
 ## Out of scope
 
@@ -87,13 +96,18 @@ In order, one seam at a time.
   field carrying short answer text for the gap. It needs a schema field, a
   prompting change and a new route for the answer to travel; this needs none of
   them, and the issue itself called it the more expensive option.
-- **The second-failed-probe close.** `answerProbe` sets `resolved[blankId]`
-  without calling `view.resolveBlank` at all, so a blank that closes that way
-  keeps the empty placeholder and the visible control `activateBlank` left it.
-  Same family, different method, and not what #112 reports. Filed separately.
+- **The second-failed-probe close.** [ADR-0009](../adr/0009-self-explanation-probe.md)
+  makes a second failed probe a reveal, "mirroring rung 3", and
+  `createDomView.probeGraded` renders no reveal for it: `probeGraded` is handed
+  `blankResolved` and `revealedOptionId` and reads neither. The principle this
+  change establishes — a reveal is disclosed in the note — is not applied to
+  that path. Same family, different method, and not what #112 reports. Filed
+  separately.
 - **Testing the DOM half.** Node with no DOM is the deliberate arrangement of
-  `test_ui_client.py`; adding a DOM to test one marker string would add the
-  first test-time dependency this repo does not have.
+  `test_ui_client.py`; adding a DOM would add the first test-time JS dependency
+  this repo does not have. The two decisions are pulled out into the state
+  machine and a pure function instead; what stays untested is placement and
+  styling, which is where the seam was already drawn.
 - **The service, the renderer, the domain.** Untouched.
 
 ## Acceptance
@@ -112,3 +126,23 @@ In order, one seam at a time.
 6. A wrong answer on rungs one and two emits no `resolveBlank` at all.
 7. `showHint` still receives the revealed option id in Novice, so the note can
    name the option.
+8. The gap a rung-three close leaves behind is not empty: `resolveBlank`
+   carries a non-empty `closedText`, and a correct close carries none. This is
+   master acceptance 31 held by a test rather than by a string in an untested
+   file — the check that fails if the marker is ever emptied.
+9. The note names the option where there is one, as a finished sentence: the
+   option clause is terminated, so it and the line after it do not run
+   together.
+10. On a reveal carrying no option id the note still shows, and does not claim
+    to name an answer — the reveal is prose and it is in the feedback block
+    above.
+11. A reveal where nothing names the answer anywhere — no option id and no
+    feedback, which is what a hint dropped by `_safe_hint` leaves — says so,
+    and says something different from the case where the feedback does carry
+    the reveal.
+12. Not covered by a test, and named here so the gap is on the record: that the
+    note and the marker are *placed* where the spec says, that the closed
+    state's styling distinguishes it from the resolved one, and that
+    `probeGraded` clears the panel it does not rewrite. All three are
+    `createDomView` and `overlay.css`, which have no tests; they are verified
+    by inspection.
