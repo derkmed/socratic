@@ -116,6 +116,7 @@ smoke test the automated suite cannot perform (see [Tests](#tests)).
 
 | Symptom | Likely cause |
 |---|---|
+| An **empty reply**, with no error anywhere | The Pipe you pasted is out of date. The overlay travels on an `embeds` event; a Pipe that *returns* it renders nothing at all, and says nothing about why ([ADR-0017](docs/adr/0017-the-overlay-is-emitted-not-returned.md)). Re-paste `pipe/socratic_pipe.py`. |
 | `docker compose up` exits complaining about a variable | One of the three values in step 1 is unset in this shell. Export it or put it in `.env`. |
 | No **socratic** model in the chat picker | The Function was saved but not *enabled*, or you are signed in as a non-admin who cannot see `/admin/functions`. |
 | The overlay renders but answering does nothing | The browser cannot reach the service. Open <http://localhost:8080> directly; if that works but answering does not, `SOCRATIC_PUBLIC_URL` is wrong for where the *browser* is. |
