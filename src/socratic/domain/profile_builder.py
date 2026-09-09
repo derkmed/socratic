@@ -137,15 +137,18 @@ def sealed_prefix(
         boundary is **exclusive**: the attempt named by it is already folded in.
 
     Returns:
-      The contiguous run of sealed attempts after the watermark, oldest first,
-      stopping at the first attempt still in flight.
+      The contiguous run of closed attempts after the watermark, oldest first,
+      stopping at the first attempt still in flight. Closed, not sealed: an
+      abandoned attempt is finished with too, and it will never carry a
+      `sealed_at` (#15), so reading the barrier off that stamp would park the
+      watermark behind it for good.
     """
     ordered = sorted(attempts, key=lambda attempt: attempt.attempt_id)
     eligible: list[QuizAttempt] = []
     for attempt in ordered:
         if after is not None and attempt.attempt_id <= after:
             continue
-        if not attempt.is_sealed:
+        if not attempt.is_closed:
             break
         eligible.append(attempt)
     return tuple(eligible)

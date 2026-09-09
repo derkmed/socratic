@@ -419,6 +419,7 @@ class TestSealing:
             ),
             "with_quiz": (_quiz(),),
             "with_probe_resolved": (0, _probe()),
+            "with_queued_topics": (("the third law",),),
         }
         mutators = {
             name
@@ -427,10 +428,10 @@ class TestSealing:
         }
         assert mutators == set(arguments)
 
-        sealed = _attempt().sealed(LATER)
-        for name, args in arguments.items():
-            with pytest.raises(ValueError, match="sealed"):
-                getattr(sealed, name)(*args)
+        for closed in (_attempt().sealed(LATER), _attempt().abandoned()):
+            for name, args in arguments.items():
+                with pytest.raises(ValueError, match="sealed|abandoned"):
+                    getattr(closed, name)(*args)
 
     def test_a_sealed_attempt_is_still_reconstructible_field_for_field(self):
         # Deliberate, and the reason the `dataclasses.replace` route stays
@@ -451,13 +452,42 @@ class TestSealing:
     def test_displacement_marks_the_attempt_abandoned(self):
         # ADR-0005 / CONTEXT Outcome: `abandoned` is written only on
         # displacement. We never guess that a learner left.
-        abandoned = _attempt().abandoned(LATER)
+        abandoned = _attempt().abandoned()
         assert abandoned.outcome is Outcome.ABANDONED
-        assert abandoned.sealed_at == LATER
 
-    def test_an_outcome_other_than_in_flight_needs_a_sealed_at(self):
+    def test_an_abandoned_attempt_leaves_sealed_at_null(self):
+        # #15: the learner left this quiz, they did not finish it. `sealed_at`
+        # is the completion stamp, and there was no completion.
+        assert _attempt().abandoned().sealed_at is None
+
+    def test_an_abandoned_attempt_keeps_its_guesses_and_probes(self):
+        # #15: displacement closes the record, it does not empty it - the
+        # partial work is the curation signal.
+        worked = _attempt().with_guess(_guess()).with_probe(_probe())
+        abandoned = worked.abandoned()
+        assert abandoned.guesses == worked.guesses
+        assert abandoned.probes == worked.probes
+
+    def test_an_abandoned_attempt_is_closed_but_not_sealed(self):
+        abandoned = _attempt().abandoned()
+        assert abandoned.is_sealed is False
+        assert abandoned.is_closed is True
+
+    def test_an_abandoned_attempt_cannot_be_sealed(self):
+        with pytest.raises(ValueError, match="abandoned"):
+            _attempt().abandoned().sealed(LATER)
+
+    def test_an_abandoned_attempt_cannot_be_abandoned_again(self):
+        with pytest.raises(ValueError, match="abandoned"):
+            _attempt().abandoned().abandoned()
+
+    def test_a_resolved_attempt_needs_a_sealed_at(self):
         with pytest.raises(ValueError, match="sealed_at"):
             _attempt(outcome=Outcome.RESOLVED)
+
+    def test_an_abandoned_attempt_cannot_carry_a_sealed_at(self):
+        with pytest.raises(ValueError, match="sealed_at"):
+            _attempt(outcome=Outcome.ABANDONED, sealed_at=LATER)
 
     def test_an_in_flight_attempt_cannot_carry_a_sealed_at(self):
         with pytest.raises(ValueError, match="sealed_at"):
@@ -520,12 +550,41 @@ class TestSessionAgreement:
 
     def test_sealing_and_abandoning_preserve_the_agreement(self):
         attempt = _attempt()
-        for closed in (attempt.sealed(LATER), attempt.abandoned(LATER)):
+        for closed in (attempt.sealed(LATER), attempt.abandoned()):
             assert closed.session_id == closed.quiz.quiz_session_id
 
     def test_the_event_writes_preserve_the_agreement(self):
         attempt = _attempt().with_guess(_guess()).with_probe(_probe())
         assert attempt.session_id == attempt.quiz.quiz_session_id
+
+
+class TestQueuedTopics:
+    """The queue the learner's other questions wait in (CONTEXT: Queued topics).
+
+    Persisted on the attempt, per #15: it outlives the attempt it was raised
+    against, because displacement carries it forward to the restart.
+    """
+
+    def test_an_attempt_starts_with_an_empty_queue(self):
+        assert _attempt().queued_topics == ()
+
+    def test_a_queued_topic_is_written_through_the_record(self):
+        queued = _attempt().with_queued_topics(("the third law",))
+        assert queued.queued_topics == ("the third law",)
+
+    def test_the_queue_replaces_rather_than_appends(self):
+        # The caller owns the order and the distinctness (`inquiry.py`); the
+        # record owns only the guard and the immutability.
+        queued = _attempt().with_queued_topics(("a",)).with_queued_topics(("b",))
+        assert queued.queued_topics == ("b",)
+
+    def test_the_queue_is_stored_as_a_tuple_whatever_the_caller_passes(self):
+        queued = _attempt().with_queued_topics(["a", "b"])
+        assert queued.queued_topics == ("a", "b")
+
+    def test_a_queued_topic_survives_the_other_writes(self):
+        attempt = _attempt().with_queued_topics(("the third law",))
+        assert attempt.with_guess(_guess()).queued_topics == ("the third law",)
 
 
 class TestBounds:

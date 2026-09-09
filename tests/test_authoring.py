@@ -924,6 +924,21 @@ class TestAnswersInTheWindow:
         assert len(attempt.guesses) == 1
         assert attempt.quiz.blanks[0].hints is not None
 
+    def test_a_payload_landing_on_an_abandoned_attempt_is_dropped(self):
+        # #15: the learner displaced the quiz inside the pedagogy window. The
+        # attempt is closed with no `sealed_at`, so a guard reading only that
+        # stamp would try to write to it and raise on the learner's behalf.
+        service, client, attempts = build_both(skeleton_payload(), pedagogy_payload())
+        quiz = _author(service)
+        stored = attempts.list_for_learner(LEARNER)[0]
+        attempts.save(stored.abandoned())
+
+        attempt = service.author_pedagogy(quiz, LEARNER)
+
+        assert attempt.outcome is Outcome.ABANDONED
+        assert attempt.quiz.blanks[0].hints is None
+        assert client.call_count(CallType.AUTHOR_PEDAGOGY) == 1
+
     def test_a_payload_landing_on_a_sealed_attempt_is_dropped(self):
         service, client, attempts = build_both(skeleton_payload(), pedagogy_payload())
         quiz = _author(service)
@@ -941,7 +956,7 @@ class TestAnswersInTheWindow:
     def test_a_payload_lands_on_the_restart_not_the_attempt_it_displaced(self):
         # The case #15 creates: the session was displaced and started again, so
         # it holds an abandoned attempt as well as the live one. The payload is
-        # for the live one - the abandoned attempt is sealed, so landing on it
+        # for the live one - the abandoned attempt is closed, so landing on it
         # would silently drop pedagogy the learner is waiting for.
         service, _, attempts = build_both(skeleton_payload(), pedagogy_payload())
         quiz = _author(service)
@@ -949,7 +964,7 @@ class TestAnswersInTheWindow:
         earlier = Ulid.mint(clock=lambda: FROZEN_MILLIS - 60_000)
         displaced = dataclasses.replace(
             live, attempt_id=str(earlier), created_at=earlier.timestamp
-        ).abandoned(live.created_at)
+        ).abandoned()
         assert displaced.session_id == live.session_id
         attempts.save(displaced)
 
@@ -957,7 +972,7 @@ class TestAnswersInTheWindow:
 
         assert attempt.attempt_id == live.attempt_id
         assert attempt.quiz.blanks[0].hints is not None
-        # And the sealed record it displaced is exactly as it was.
+        # And the abandoned record it displaced is exactly as it was.
         assert attempts.get(LEARNER, displaced.attempt_id) == displaced
 
 

@@ -11,9 +11,10 @@ Two of ADR-0005's decisions are structural here rather than documented:
   so "my past quizzes" is a single-partition read and there is no cross-partition
   read path to reach for by accident. Cross-user analytics is an offline job by
   design and does not use this port.
-* **Sealed means sealed.** A store that accepts a second write to a sealed
+* **Closed means closed.** A store that accepts a second write to a sealed
   attempt would make the audit record untrustworthy no matter how careful the
-  callers are, so it refuses one.
+  callers are, so it refuses one - and since #15 an abandoned attempt is closed
+  on its `outcome` alone, with no `sealed_at` to read.
 
 Records are frozen dataclasses over tuples, so a stored value cannot be mutated
 through a reference a caller kept; the implementations hold them directly rather
@@ -38,7 +39,8 @@ class AttemptRepository(abc.ABC):
         """Write the whole document.
 
         Raises:
-            ValueError: if the stored attempt is already sealed.
+            ValueError: if the stored attempt is already closed - sealed, or
+                abandoned by displacement.
         """
 
     @abc.abstractmethod
@@ -143,10 +145,15 @@ class InMemoryAttemptRepository(AttemptRepository):
     def save(self, attempt: QuizAttempt) -> None:
         partition = self._partitions.setdefault(attempt.learner_id, {})
         stored = partition.get(attempt.attempt_id)
-        if stored is not None and stored.is_sealed:
+        if stored is not None and stored.is_closed:
+            how = (
+                f"sealed at {stored.sealed_at}"
+                if stored.is_sealed
+                else "abandoned by displacement"
+            )
             raise ValueError(
-                f"attempt {attempt.attempt_id} was sealed at {stored.sealed_at} "
-                "and is never written again"
+                f"attempt {attempt.attempt_id} was {how} and is never "
+                "written again"
             )
         partition[attempt.attempt_id] = attempt
 
