@@ -7,6 +7,8 @@ Resolves: the `fetch`-vs-`__event_call__` question carried since
 Amends: [ADR-0003](0003-grading-authority-and-key-custody.md) (key custody is a
 different process than stated), [ADR-0012](0012-iframe-content-rendering.md)
 (hardened deployments leave the prototype)
+Amended by: [ADR-0017](0017-the-overlay-is-emitted-not-returned.md) (the Pipe
+emits the rendered HTML as an `embeds` event; it cannot return it)
 Verified by: the iframe-`fetch` spike in
 [`docs/research/open-webui-fit.md`](../research/open-webui-fit.md) — the `fetch`
 path this ADR makes the *only* answer path was measured in Chrome and Edge rather
