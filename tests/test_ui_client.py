@@ -387,7 +387,42 @@ class TestTheVerdict:
             % graded()
         )
 
-        assert only(emitted, "resolveBlank")["args"][0] == "b1"
+        assert only(emitted, "resolveBlank")["args"][0]["blankId"] == "b1"
+
+    def test_a_resolved_blank_is_told_what_to_put_in_the_gap(self):
+        """Master acceptance 31 is "no silent blanks", and a finished quiz whose
+        every blank is an empty gap is exactly that. What the learner got right
+        is what fills it — the service sends no resolved text on a correct
+        answer, and a client that waited for one would leave a hole."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o1');
+            emit({});
+            """
+            % graded()
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
+
+    def test_a_rung_three_reveal_fills_the_gap_with_the_revealed_option(self):
+        """Not with what the learner typed — they got it wrong, and the reveal
+        is the one sanctioned disclosure of the key (ADR-0009)."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o2');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                revealed_option_id="o1",
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
 
 
 class TestTheLatePedagogyWindow:
