@@ -24,7 +24,6 @@ from socratic.domain.records import (
     MAX_PROBES_PER_BLANK,
     SCHEMA_VERSION,
     Guess,
-    LearnerProfile,
     ModelCallRecord,
     Outcome,
     Probe,
@@ -390,18 +389,6 @@ class TestRatingRecord:
             rating.score = 1
 
 
-class TestLearnerProfile:
-    def test_a_profile_carries_a_narrative_and_a_watermark(self):
-        profile = LearnerProfile(
-            learner_id="learner-1",
-            narrative="Comfortable with entropy, shaky on free energy.",
-            watermark="01J000000000000000000000",
-            updated_at=LATER,
-        )
-        assert profile.learner_id == "learner-1"
-        assert profile.watermark == "01J000000000000000000000"
-
-    def test_a_fresh_profile_has_no_watermark(self):
-        profile = LearnerProfile(learner_id="learner-1")
-        assert profile.watermark is None
-        assert profile.narrative == ""
+# The learner profile is not a record in this module - it is a
+# rewritten-in-place aggregate, and it lives in `socratic.domain.profiles`
+# (#36). Its tests moved with it, to `tests/test_profiles.py`.

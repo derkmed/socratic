@@ -30,15 +30,23 @@ and `tests/test_prompting.py` locks that branch out.
 explanation token stream (`text | math | blank`). A `PromptSegment` is a
 different concept that happens to share the English word. The two must never be
 confused, which is why everything here carries the `Prompt` prefix.
+
+**`LearnerProfile` is not defined here.** It lives in `socratic.domain.profiles`
+- a leaf module both this assembler and the persistence ports can import without
+importing each other (#36). It is re-exported here so that
+`socratic.domain.prompting.LearnerProfile` keeps resolving for code written
+against the old location; `render_profile` below is still the single point at
+which its internals are read.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Mapping, Sequence
 
 from socratic.domain.modes import ProbeCadence
+from socratic.domain.profiles import LearnerProfile
 from socratic.domain.types import (
     BlankSegment,
     MathSegment,
@@ -123,28 +131,6 @@ class PromptSegments:
             for index, segment in enumerate(self.segments)
             if segment.cache_control
         )
-
-
-@dataclass(frozen=True, slots=True)
-class LearnerProfile:
-    """The ledger/narrative pair of ADR-0008, minimal for now.
-
-    The **ledger** is structured and exactly recomputed; the **narrative** is
-    the LLM-authored prose folded forward incrementally. Where they disagree the
-    ledger is authoritative, which is why `render_profile` puts it first.
-
-    Deliberately thin: the profile reaches a prompt only through
-    `render_profile`, and no other part of the domain reads these fields, so the
-    shape is free to grow without touching grading, persistence, or this
-    assembler.
-
-    `learner_id` is annotated `str` rather than a named alias so that the alias
-    is introduced exactly once, by the persistence ticket that needs it.
-    """
-
-    learner_id: str
-    ledger: Mapping[str, int] = field(default_factory=dict)
-    narrative: str | None = None
 
 
 def render_profile(profile: LearnerProfile) -> str:

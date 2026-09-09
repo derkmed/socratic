@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import abc
 
-from socratic.domain.records import LearnerProfile, QuizAttempt, RatingRecord
+from socratic.domain.profiles import LearnerProfile
+from socratic.domain.records import QuizAttempt, RatingRecord
 
 
 class AttemptRepository(abc.ABC):
