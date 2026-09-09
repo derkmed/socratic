@@ -219,6 +219,12 @@ class QuizAttempt:
                 f"an attempt is keyed by a ULID: {self.attempt_id!r} ({error})"
             ) from None
 
+        if self.session_id != self.quiz.quiz_session_id:
+            raise ValueError(
+                f"an attempt and its quiz name one session: "
+                f"{self.session_id!r} against {self.quiz.quiz_session_id!r}"
+            )
+
         if len(self.quiz.blanks) > MAX_BLANKS:
             raise ValueError(
                 f"a quiz carries at most {MAX_BLANKS} blanks, got "
