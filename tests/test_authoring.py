@@ -258,7 +258,9 @@ class TestPersistence:
         assert attempt.attempt_id != result.quiz_session_id
 
     def test_the_authoring_call_is_stamped_with_its_message_id_and_usage(self):
-        _, _, attempts = author(quiz_payload())
+        _, _, attempts = author(
+            quiz_payload(), input_tokens=910, output_tokens=37
+        )
 
         attempt = attempts.list_for_learner(LEARNER)[0]
         assert len(attempt.model_calls) == 1
@@ -267,6 +269,10 @@ class TestPersistence:
         assert call.message_id == "msg_01AUTHORING"
         assert call.usage.cache_read_input_tokens == 512
         assert call.usage.cache_creation_input_tokens == 0
+        # #55: the plain input/output counts must survive onto the record
+        # too, not just the two cache counters.
+        assert call.usage.input_tokens == 910
+        assert call.usage.output_tokens == 37
 
     def test_the_attempt_records_the_model_the_effort_and_the_cadence(self):
         service, _, attempts = build(quiz_payload())
