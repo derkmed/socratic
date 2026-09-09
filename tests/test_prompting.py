@@ -513,6 +513,161 @@ class TestVolatileTail:
         assert "phlogiston" in segments.volatile_tail.text
 
 
+class TestInquiry:
+    """The learner's inquiry is the most learner-specific string there is.
+
+    It reaches the prompt through the tail and nowhere else. An inquiry that
+    landed in segment 1 would give every learner their own prefix — the exact
+    anti-pattern ADR-0006 exists to prevent — and one that reshaped segment 2
+    would split that entry per request rather than per session.
+    """
+
+    ADA_INQUIRY = "Why does phlogiston not appear in modern chemistry?"
+    BASHO_INQUIRY = "How many syllables does a haiku's second line take?"
+
+    def test_the_inquiry_reaches_the_volatile_tail(self):
+        segments = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            inquiry=self.ADA_INQUIRY,
+        )
+        assert self.ADA_INQUIRY in segments.volatile_tail.text
+
+    def test_the_inquiry_never_reaches_the_cached_segments(self):
+        for call_type in CallType:
+            segments = prompting.assemble(
+                call_type,
+                profile=ADA,
+                probe_cadence=ProbeCadence.ALWAYS,
+                quiz=_quiz(),
+                inquiry=self.ADA_INQUIRY,
+            )
+            assert self.ADA_INQUIRY not in segments.segment_1.text
+            assert self.ADA_INQUIRY not in segments.segment_2.text
+            assert "phlogiston" not in segments.segment_1.text
+            assert "phlogiston" not in segments.segment_2.text
+
+    def test_the_tail_carrying_an_inquiry_is_still_never_cacheable(self):
+        for call_type in CallType:
+            segments = prompting.assemble(
+                call_type,
+                profile=ADA,
+                probe_cadence=ProbeCadence.ALWAYS,
+                inquiry=self.ADA_INQUIRY,
+            )
+            assert segments.volatile_tail.cache_control is False
+            assert segments.breakpoints() == (0, 1)
+
+    @pytest.mark.parametrize("call_type", list(CallType))
+    def test_segment_one_is_byte_identical_across_different_inquiries(
+        self, call_type
+    ):
+        ada = prompting.assemble(
+            call_type,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+            inquiry=self.ADA_INQUIRY,
+        )
+        basho = prompting.assemble(
+            call_type,
+            profile=BASHO,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_novice_quiz(),
+            inquiry=self.BASHO_INQUIRY,
+        )
+        assert ada.segment_1.text == basho.segment_1.text
+
+    @pytest.mark.parametrize("call_type", list(CallType))
+    def test_segment_one_is_byte_identical_whether_or_not_an_inquiry_is_given(
+        self, call_type
+    ):
+        # The omission half of ADR-0010: a learner who supplies no inquiry must
+        # not get a shorter prefix than one who does.
+        with_inquiry = prompting.assemble(
+            call_type,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+            inquiry=self.ADA_INQUIRY,
+        ).segment_1.text
+        without = prompting.assemble(
+            call_type,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+        ).segment_1.text
+        assert with_inquiry == without
+        assert len(with_inquiry) == len(without)
+
+    def test_segment_two_is_unperturbed_by_the_inquiry(self):
+        # Segment 2 is per learner *per session*; the inquiry is per request.
+        # Letting it reshape segment 2 would rewrite that entry every call.
+        quiz = _quiz()
+        with_inquiry = prompting.assemble(
+            CallType.GRADE_ANSWER,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=quiz,
+            inquiry=self.ADA_INQUIRY,
+        ).segment_2.text
+        without = prompting.assemble(
+            CallType.GRADE_ANSWER,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=quiz,
+        ).segment_2.text
+        assert with_inquiry == without
+
+    def test_the_inquiry_is_optional_so_existing_callers_are_untouched(self):
+        # Backward compatibility: omitting the argument leaves the tail
+        # byte-identical to what a caller got before the slot existed.
+        arguments = dict(
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+            guesses=("b1: 'heap' — wrong",),
+            current_blank_id="b1",
+            current_guess="the stack frame",
+        )
+        omitted = prompting.assemble(CallType.GRADE_ANSWER, **arguments)
+        explicit_none = prompting.assemble(
+            CallType.GRADE_ANSWER, inquiry=None, **arguments
+        )
+        assert omitted.volatile_tail.text == explicit_none.volatile_tail.text
+        assert "inquiry" not in omitted.volatile_tail.text.lower()
+
+    def test_the_inquiry_leads_the_tail_ahead_of_the_guess_history(self):
+        tail = prompting.assemble(
+            CallType.GRADE_ANSWER,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+            inquiry=self.ADA_INQUIRY,
+            guesses=("first guess",),
+            current_blank_id="b1",
+            current_guess="the stack frame",
+        ).volatile_tail.text
+        positions = [
+            tail.index(self.ADA_INQUIRY),
+            tail.index("first guess"),
+            tail.index("the stack frame"),
+        ]
+        assert positions == sorted(positions)
+
+    def test_a_multi_line_inquiry_survives_intact(self):
+        inquiry = "First line of the question.\nSecond line of the question."
+        tail = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=BASHO,
+            probe_cadence=ProbeCadence.OFF,
+            inquiry=inquiry,
+        ).volatile_tail.text
+        assert "First line of the question." in tail
+        assert "Second line of the question." in tail
+
+
 class TestSegmentsValue:
     def test_a_prompt_segment_is_frozen(self):
         segment = PromptSegment(
