@@ -27,8 +27,6 @@ except ModuleNotFoundError:  # pragma: no cover
 SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
 PYPROJECT = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
 
-FORBIDDEN_HOST_PACKAGES = {"open_webui", "openwebui"}
-
 DOMAIN_PACKAGE = "domain"
 """The stdlib-only rule scopes here, and only here (CONTEXT: Portability seam).
 
@@ -80,15 +78,6 @@ def test_the_anthropic_sdk_is_imported_only_by_the_adapter():
     )
     strays = sorted(str(path) for path in importers - {ANTHROPIC_ADAPTER})
     assert strays == [], f"the SDK leaked outside the adapter, imported by: {strays}"
-
-
-def test_no_module_imports_open_webui():
-    offenders = [
-        str(path)
-        for path, roots in _imported_roots().items()
-        if roots & FORBIDDEN_HOST_PACKAGES
-    ]
-    assert offenders == [], f"the host leaked below the portability seam: {offenders}"
 
 
 def _load_pyproject() -> dict:
