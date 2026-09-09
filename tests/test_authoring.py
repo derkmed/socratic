@@ -12,6 +12,7 @@ so there is no fake in this file, and no test reaches the network.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
@@ -859,6 +860,28 @@ class TestAnswersInTheWindow:
         assert attempt.is_sealed
         assert attempt.quiz.blanks[0].hints is None
         assert client.call_count(CallType.AUTHOR_PEDAGOGY) == 1
+
+    def test_a_payload_lands_on_the_restart_not_the_attempt_it_displaced(self):
+        # The case #15 creates: the session was displaced and started again, so
+        # it holds an abandoned attempt as well as the live one. The payload is
+        # for the live one - the abandoned attempt is sealed, so landing on it
+        # would silently drop pedagogy the learner is waiting for.
+        service, _, attempts = build_both(skeleton_payload(), pedagogy_payload())
+        quiz = _author(service)
+        live = attempts.list_for_learner(LEARNER)[0]
+        earlier = Ulid.mint(clock=lambda: FROZEN_MILLIS - 60_000)
+        displaced = dataclasses.replace(
+            live, attempt_id=str(earlier), created_at=earlier.timestamp
+        ).abandoned(live.created_at)
+        assert displaced.session_id == live.session_id
+        attempts.save(displaced)
+
+        attempt = service.author_pedagogy(quiz, LEARNER)
+
+        assert attempt.attempt_id == live.attempt_id
+        assert attempt.quiz.blanks[0].hints is not None
+        # And the sealed record it displaced is exactly as it was.
+        assert attempts.get(LEARNER, displaced.attempt_id) == displaced
 
 
 class TestThePedagogyPayloadFailing:
