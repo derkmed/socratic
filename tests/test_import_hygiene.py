@@ -2,9 +2,12 @@
 
 Two rules, both load-bearing from the first commit rather than asserted later:
 
-* **No third-party SDK.** `anthropic` is an optional extra, so the domain is
-  testable with no SDK installed. The Anthropic adapter is the only module that
-  may import it, and it is not in this package yet.
+* **No third-party SDK in the domain.** `anthropic` is an optional extra, so
+  `socratic.domain` is testable with no SDK installed. The Anthropic adapter is
+  the only module that may import it — and now that the adapter exists, the rule
+  is stated as *exclusivity* rather than as a blanket ban. A blanket ban has to
+  be deleted the first time an adapter lands; "imported here and nowhere else"
+  survives, and is the stronger of the two.
 * **Nothing from Open WebUI** (spec acceptance 37, CONTEXT: Portability seam).
   The seam is a process boundary, so an Open WebUI import below it would not
   resolve at all; this test is the fast check that catches it at commit time.
@@ -24,6 +27,17 @@ SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
 PYPROJECT = pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 FORBIDDEN_HOST_PACKAGES = {"open_webui", "openwebui"}
+
+DOMAIN_PACKAGE = "domain"
+"""The stdlib-only rule scopes here, and only here (CONTEXT: Portability seam).
+
+It was written against the whole of `src/socratic/`, which over-reached: the
+seam it protects is the domain's, and `socratic.adapters` exists precisely to
+hold the imports the domain may not have. The Open WebUI rule below keeps
+scanning everything, because *nothing* in the package may reach the host."""
+
+ANTHROPIC_ADAPTER = pathlib.Path("adapters") / "anthropic_client.py"
+"""The one module allowed to import the SDK (master spec §5, ticket #7)."""
 
 
 def _imported_roots() -> dict[pathlib.Path, set[str]]:
@@ -45,16 +59,26 @@ def test_the_domain_imports_only_the_standard_library_and_itself():
     offenders = {
         str(path): sorted(roots - allowed)
         for path, roots in _imported_roots().items()
-        if roots - allowed
+        if path.parts[0] == DOMAIN_PACKAGE and roots - allowed
     }
     assert offenders == {}, f"third-party imports in the domain package: {offenders}"
 
 
-def test_no_module_imports_the_anthropic_sdk():
-    offenders = [
-        str(path) for path, roots in _imported_roots().items() if "anthropic" in roots
-    ]
-    assert offenders == [], f"the SDK is an optional extra, imported by: {offenders}"
+def test_the_anthropic_sdk_is_imported_only_by_the_adapter():
+    # Master spec §5 and CONTEXT: Portability seam — "the adapter is the only
+    # module that imports the Anthropic SDK". Asserted in both directions: the
+    # adapter does import it, and nothing else does. The second half is the
+    # rule; the first is what stops the rule from being vacuously satisfied by
+    # an adapter that quietly stopped calling the API.
+    importers = {
+        path for path, roots in _imported_roots().items() if "anthropic" in roots
+    }
+    assert ANTHROPIC_ADAPTER in importers, (
+        f"{ANTHROPIC_ADAPTER} is the adapter and must import the SDK; "
+        f"found importers: {sorted(str(path) for path in importers)}"
+    )
+    strays = sorted(str(path) for path in importers - {ANTHROPIC_ADAPTER})
+    assert strays == [], f"the SDK leaked outside the adapter, imported by: {strays}"
 
 
 def test_no_module_imports_open_webui():
