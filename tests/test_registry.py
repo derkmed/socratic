@@ -24,6 +24,7 @@ from socratic.domain.registry import (
     ModePolicy,
     ModeRegistry,
     default_registry,
+    mode_name,
 )
 from socratic.domain.types import Blank, Option
 
@@ -233,6 +234,48 @@ class TestRegistryLookup:
 
     def test_a_registry_can_be_built_from_nothing(self):
         assert ModeRegistry().modes() == ()
+
+
+class TestTheCanonicalKey:
+    """`ModeKey` is `str`, so `"novice"` and `DifficultyMode.NOVICE` are the
+    same key to a dict and different objects to a reader (#89). `key_for` is
+    where the registry says which of the two it holds - the only module
+    entitled to, since it is the only place mode is branched on."""
+
+    def test_a_bare_string_resolves_to_the_key_the_registry_holds(self):
+        key = default_registry().key_for("novice")
+
+        assert key is DifficultyMode.NOVICE
+
+    def test_the_registered_member_resolves_to_itself(self):
+        assert default_registry().key_for(DifficultyMode.ADVANCED) is (
+            DifficultyMode.ADVANCED
+        )
+
+    def test_a_third_mode_registered_as_a_plain_string_stays_a_plain_string(self):
+        # No conversion is invented: the registry hands back what it was given
+        # at registration, which for "expert" is a `str` and nothing else.
+        registry = default_registry()
+        registry.register("expert", _stub_policy())
+
+        assert registry.key_for("expert") == "expert"
+        assert not isinstance(registry.key_for("expert"), DifficultyMode)
+
+    def test_an_unregistered_mode_is_the_same_refusal_policy_for_makes(self):
+        with pytest.raises(KeyError, match="expert"):
+            default_registry().key_for("expert")
+
+
+class TestModeName:
+    """One place turns a mode key into its stored spelling, because `.value`
+    is an unsafe read on a `ModeKey` and open-coding the guard is what left
+    `prompting._render_quiz` behind (#89)."""
+
+    def test_a_member_renders_as_its_value(self):
+        assert mode_name(DifficultyMode.NOVICE) == "novice"
+
+    def test_a_plain_string_key_renders_as_itself(self):
+        assert mode_name("expert") == "expert"
 
 
 class TestAddingAThirdMode:

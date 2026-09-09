@@ -95,7 +95,13 @@ re-opening a two-option bank whose answer the learner was just told is degenerat
 Capped at one re-open per blank; a second failed probe reveals and moves on.
 
 **ModeRegistry** — maps mode to policy. **The only place mode is branched on.** An
-`if mode ==` anywhere else is a bug.
+`if mode ==` anywhere else is a bug. It is also the authority on **what a mode is
+named**: `ModeKey` is `str`, so `"novice"` off the wire and `DifficultyMode.NOVICE`
+are one key and two objects. `key_for` returns the key the registry was registered
+under — the canonical one — and `QuizAuthoring.author` calls it before a mode is
+stamped on anything, so one type reaches everything below the seam. `mode_name` is
+the single way a key becomes its stored spelling; `.value` on a `ModeKey` is a bug
+for the same reason an `if mode ==` is.
 
 **LearnerSettings** — the two per-learner settings as one value: the mode toggle
 and `probe_cadence`. What the Pipe maps `UserValves` into, and the value the

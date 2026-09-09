@@ -41,6 +41,23 @@ ModeKey = str
 """What the registry is keyed by. `DifficultyMode` is a `str` enum, so a further
 mode is a new key rather than a change to every module that names the type."""
 
+
+def mode_name(mode: ModeKey) -> str:
+    """A mode key as its stored spelling - `novice`, `advanced`, `expert`.
+
+    `ModeKey` is `str` and a registry may hold a plain one, so `mode.value` is
+    an unsafe read wherever a key is rendered. Open-coding the guard instead is
+    what left `prompting._render_quiz` reading `.value` while
+    `payloads.blank_body` asked `hasattr` two layers away (#89): one function
+    is the whole point.
+
+    This is not a branch on mode - it never asks *which* mode it is - so it
+    does not make this module's exemption from the `if mode ==` scan load
+    bearing.
+    """
+    return str(getattr(mode, "value", mode))
+
+
 BlankValidator = Callable[[Blank], "tuple[str, ...]"]
 """Returns the reasons a blank is inadmissible - empty when it is fine.
 
@@ -146,10 +163,30 @@ class ModeRegistry:
         self._policies[mode] = policy
 
     def policy_for(self, mode: ModeKey) -> ModePolicy:
-        try:
-            return self._policies[mode]
-        except KeyError:
-            raise KeyError(f"no policy registered for mode {mode!r}") from None
+        return self._policies[self.key_for(mode)]
+
+    def key_for(self, mode: ModeKey) -> ModeKey:
+        """The key this registry holds, for any spelling that compares equal.
+
+        `DifficultyMode` is a `str` enum, so `"novice"` and
+        `DifficultyMode.NOVICE` are one key to a dict and two different objects
+        to anything that reads one afterwards. A caller that has been handed a
+        mode off the wire uses this to get the object the registry was
+        registered under, before it stores the mode anywhere - which is what
+        keeps a single type below the seam (#89).
+
+        Nothing is converted: a third mode registered as the plain string
+        `"expert"` comes back as `"expert"`. The registry is the authority on
+        what a mode is named, not `DifficultyMode`.
+
+        Raises:
+          KeyError: If no policy is registered for `mode`. The one refusal both
+            lookups make, written here.
+        """
+        for key in self._policies:
+            if key == mode:
+                return key
+        raise KeyError(f"no policy registered for mode {mode!r}")
 
     def modes(self) -> tuple[ModeKey, ...]:
         return tuple(self._policies)

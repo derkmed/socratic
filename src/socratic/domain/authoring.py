@@ -171,6 +171,13 @@ class QuizAuthoring:
         """
         if not inquiry.strip():
             raise ValueError("an inquiry is required to author against")
+        # The mode arrives from the wire as whatever string the request named,
+        # and everything below stamps it on a `Quiz`, a `Blank` and a
+        # `QuizAttempt`. Canonicalising it here - through the registry, which
+        # is the only thing entitled to an opinion about mode - is what keeps
+        # one type below the seam, instead of every reader of `.mode` having to
+        # ask whether it got the member or the string (#89, #85).
+        mode = self._registry.key_for(mode)
         policy = self._registry.policy_for(mode)
 
         segments = prompting.assemble(

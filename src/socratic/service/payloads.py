@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from socratic.domain import session as session_module
 from socratic.domain import types
-from socratic.domain.registry import ModeRegistry
+from socratic.domain.registry import ModeRegistry, mode_name
 from socratic.rendering import content, markdown, sanitiser
 
 
@@ -111,7 +111,7 @@ def blank_body(blank: types.Blank, registry: ModeRegistry) -> dict[str, Any]:
     policy = registry.policy_for(blank.mode)
     return {
         "blank_id": blank.blank_id,
-        "mode": str(blank.mode.value if hasattr(blank.mode, "value") else blank.mode),
+        "mode": mode_name(blank.mode),
         "render_hint": policy.render_hint.value,
         "options": (
             [_option(option) for option in blank.options] if blank.options else None

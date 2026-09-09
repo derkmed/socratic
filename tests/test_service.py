@@ -42,6 +42,11 @@ from socratic.domain import session as session_module  # noqa: E402
 from socratic.domain.modes import DifficultyMode, GradingStrategy  # noqa: E402
 from socratic.domain.prompting import CallType  # noqa: E402
 from socratic.domain.records import Verdict  # noqa: E402
+from socratic.domain import types  # noqa: E402
+from socratic.domain.registry import (  # noqa: E402
+    NOVICE_POLICY,
+    default_registry,
+)
 from socratic.domain.repositories import (  # noqa: E402
     InMemoryAttemptRepository,
     InMemoryRatingRepository,
@@ -154,11 +159,25 @@ def skeleton(payload) -> ModelResponse:
 class Harness:
     """The service, its collaborators, and the handles a test needs."""
 
-    def __init__(self, payload=None, *, clock=None, ttl_millis=60_000, payloads_=None):
+    def __init__(
+        self,
+        payload=None,
+        *,
+        clock=None,
+        ttl_millis=60_000,
+        payloads_=None,
+        also=None,
+    ):
+        """`also` queues responses for the other call types, for the tests that
+        follow a quiz past the one blocking call the rest of this file stops
+        at."""
         self.clock = clock or Clock()
         queued = payloads_ if payloads_ is not None else [payload or quiz_payload()]
         self.model = RecordingModelClient(
-            {CallType.AUTHOR_SKELETON: [skeleton(one) for one in queued]}
+            {
+                CallType.AUTHOR_SKELETON: [skeleton(one) for one in queued],
+                **(also or {}),
+            }
         )
         self.attempts = InMemoryAttemptRepository()
         self.ratings = InMemoryRatingRepository()
@@ -1121,3 +1140,99 @@ class TestTheModeToggleAppliesFromTheNextAuthoringCall:
         # having it silently dropped.
         assert "mode" not in payloads.AnswerRequest.model_fields
         assert payloads.AnswerRequest.model_config["extra"] == "forbid"
+
+
+# --- A quiz authored over HTTP (#89, #85) ------------------------------------
+
+
+def pedagogy_payload(blank_ids: tuple[str, ...] = ("b1",)) -> dict:
+    """The second authoring call's payload, as `_merge_pedagogy` reads it."""
+    return {
+        "recap": "Entropy never decreases in an isolated system.",
+        "blanks": [
+            {
+                "blank_id": blank_id,
+                "reinforcement": "Entropy is the one that never decreases.",
+                "probe_question": "How did you arrive at that?",
+                "hints": [SENTINEL_HINT, "second hint", "third hint"],
+            }
+            for blank_id in blank_ids
+        ],
+    }
+
+
+def canned(payload: dict, message_id: str) -> ModelResponse:
+    return ModelResponse(content=json.dumps(payload), message_id=message_id)
+
+
+class TestAQuizAuthoredOverHttp:
+    """The mode arrives as the plain string the request named, and the domain
+    stamps it on the quiz. Until the registry canonicalised it on the way in,
+    every prompt assembled for such a quiz died on `quiz.mode.value` — which is
+    the pedagogy call for every quiz (#89) and every Advanced grading call
+    (#85). Nothing in this file reached either, because both happen after the
+    one blocking call the rest of these tests stop at."""
+
+    def test_the_stored_quiz_carries_the_registered_mode_key(self, harness):
+        harness.author()
+
+        attempt = harness.attempts.list_for_learner(LEARNER)[0]
+        assert attempt.quiz.mode is DifficultyMode.NOVICE
+        assert attempt.mode is DifficultyMode.NOVICE
+
+    def test_the_pedagogy_call_lands_on_it(self):
+        # The issue's own reproduction: author through `/quizzes`, then fire
+        # the second authoring call off the render path, as the Pipe does.
+        harness = Harness(
+            also={
+                CallType.AUTHOR_PEDAGOGY: [
+                    canned(pedagogy_payload(), "msg_02PEDAGOGY")
+                ]
+            }
+        )
+        body = harness.author()
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        merged = harness.deps.authoring.author_pedagogy(attempt.quiz, LEARNER)
+
+        assert merged.quiz.recap == "Entropy never decreases in an isolated system."
+        assert merged.quiz.blanks[0].probe_question == "How did you arrive at that?"
+
+    def test_an_advanced_answer_is_graded_rather_than_a_500(self):
+        # #85, fixed by the same normalisation: Advanced is the model-graded
+        # mode, so `/answers` assembles a prompt from the stored quiz.
+        harness = Harness(
+            payload=advanced_payload(),
+            also={CallType.GRADE_ANSWER: [canned({"verdict": "correct"}, "msg_grade")]},
+        )
+        set_settings(harness, learner_id=LEARNER, mode="advanced")
+        body = harness.author(mode="advanced")
+
+        response = harness.client.post(
+            "/answers",
+            json={
+                "quiz_session_id": body["quiz_session_id"],
+                "blank_id": "b1",
+                "submitted": "entropy",
+            },
+            headers={"X-Socratic-Token": body["capability_token"]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["verdict"] == "correct"
+
+    def test_the_wire_still_names_the_mode_as_a_plain_string(self, harness):
+        body = harness.author()
+
+        assert body["blanks"][0]["mode"] == "novice"
+
+    def test_a_third_modes_key_reaches_the_wire_intact(self):
+        """`blank_body` used to spell the enum-or-string guard out inline. It
+        renders through `registry.mode_name` now, which has to keep working for
+        a mode registered as a plain string — the case the inline guard was
+        written for."""
+        registry = default_registry()
+        registry.register("expert", NOVICE_POLICY)
+        blank = types.Blank(blank_id="b1", mode="expert", rubric="Name it.")
+
+        assert payloads.blank_body(blank, registry)["mode"] == "expert"
