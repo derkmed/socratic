@@ -106,11 +106,20 @@ its own.
 
 **Why the controls are a panel rather than markup inside the placeholder span.**
 An option's `text_html` is block-level — `render_markdown("entropy")` is
-`<p>entropy</p>` — and a `<p>` inside the placeholder `<span>` is invalid
-nesting that browsers repair by breaking the paragraph out of the span. So the
-placeholder keeps its inline marker and the control sits in a block panel. The
+`<p>entropy</p>` — and a block box inside the inline placeholder splits the very
+line it was supposed to sit in. So the placeholder keeps its inline gap and the
+control sits in a block panel under the explanation, one blank at a time. The
 blank is still drawn inline where the walk put it, which is what the criterion
-asks; the control is under it rather than in it.
+asks; the control is under it rather than in it. When a blank resolves the
+client fills its gap, so a finished quiz reads as a complete sentence rather
+than as a page of holes.
+
+The same block-level wrapping is why the overlay's stylesheet flows the
+explanation's direct-child paragraphs inline: `render_markdown` wraps every text
+segment in its own `<p>`, so left alone each blank would read as a paragraph
+break rather than as a gap in a sentence. The cost is that a paragraph break
+*inside* one text segment flattens too — a presentational workaround for
+something better fixed in the content renderer, filed separately.
 
 `render_direct_answer(body)` renders the override branch (ADR-0004) as the same
 chrome with the prose and no client script: there is no session, no token and
@@ -126,8 +135,14 @@ evaluate the same bytes and pull the factory out. Nothing runs at load time;
 `createQuizClient({sessionId, token, transport, view})` holds exactly one piece
 of mutable state — the current token — and exposes:
 
-- `submitAnswer(blankId, submitted)`, `answerProbe(blankId, text)`,
+- `start()`, `submitAnswer(blankId, submitted)`, `answerProbe(blankId, text)`,
   `dismissProbe(blankId)`, `submitRating(score)`, `dismissRating()`.
+- **The walk over the blanks.** The client is given the blank ids in declared
+  order — the order the segment walk drew them, and the order the server's
+  cadence called the last one final — and activates one at a time. It re-scans
+  on every resolution rather than holding a cursor, because a failed probe can
+  re-open a blank behind the one the learner is on: `resolved` is not a terminal
+  state (CONTEXT: Sealed).
 - Every request carries `quiz_session_id` and the current token. Every response
   that carries `capability_token` replaces it; one that does not — the rating —
   leaves it alone, rather than swapping in `undefined` and locking the learner
@@ -260,3 +275,11 @@ extra and the service's without `fastapi`. Node is a test-time tool only: no
     document and no token.
 17. `submission_body` carries `tutor_line_html`, non-null only on the
     model-graded path.
+18. The learner walks the blanks in declared order: the first is active on
+    mount, resolving one activates the next, a wrong answer activates nothing,
+    and the last one resolving reports the end rather than activating a blank
+    that is not there.
+19. A re-opened blank becomes active again, behind the one the learner had
+    moved on to.
+20. A resolved blank is told what to put in its gap — what the learner got
+    right, or the revealed option when the ladder was spent.
