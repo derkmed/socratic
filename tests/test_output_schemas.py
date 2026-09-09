@@ -170,6 +170,10 @@ def parse_grade_answer(payload, mode):
     return payload, session._parse_grading(json.dumps(payload))
 
 
+def parse_grade_probe(payload, mode):
+    return payload, session._parse_probe_grading(json.dumps(payload))
+
+
 def parse_narrative(payload, mode):
     return payload, profile_builder._parse_narrative(json.dumps(payload))
 
@@ -178,13 +182,14 @@ PARSERS = {
     CallType.AUTHOR_SKELETON: parse_skeleton,
     CallType.AUTHOR_PEDAGOGY: parse_pedagogy,
     CallType.GRADE_ANSWER: parse_grade_answer,
+    CallType.GRADE_PROBE: parse_grade_probe,
     CallType.FOLD_NARRATIVE: parse_narrative,
 }
 """Call type to the real parser of its payload.
 
-`GRADE_PROBE` is absent because no probe parser exists on `main` yet — it
-arrives with #10 (PR #65). `test_grade_probe_has_no_parser_to_check_it_against`
-fails the moment one does, which is the reconciliation this table needs.
+All five are covered. `GRADE_PROBE` joined when #10 (PR #65) landed
+`session._parse_probe_grading`, which is what the tripwire this table used to
+carry existed to catch.
 """
 
 
@@ -324,13 +329,22 @@ class TestGradeProbe:
         assert sorted(schema["properties"]) == ["correction", "verdict"]
         assert schema["properties"]["correction"] == {"type": "string"}
 
-    def test_grade_probe_has_no_parser_to_check_it_against(self):
-        assert CallType.GRADE_PROBE not in PARSERS, (
-            "a probe parser now exists (#10 / PR #65): add it to PARSERS so the "
-            "round trip covers GRADE_PROBE, and re-verify the key names in "
-            "output_schemas.GRADE_PROBE against it. This test is the "
-            "reconciliation tripwire #66 left behind on purpose."
+    def test_the_probe_parser_is_covered_by_the_round_trip(self):
+        # This replaces the tripwire #66 left for #10's parser. The keys were
+        # re-verified against `session._parse_probe_grading` when PR #65
+        # landed: it reads `verdict` and `correction`, which is what
+        # `output_schemas.GRADE_PROBE` declares.
+        assert CallType.GRADE_PROBE in PARSERS
+
+    def test_the_schema_is_stricter_than_the_parser_not_looser(self):
+        # `_parse_probe_grading` tolerates a null correction; the schema does
+        # not offer one, because segment 1 asks for a correction on every
+        # reply. Stricter-than-the-parser is the safe direction — the reverse
+        # is the drift this module exists to stop.
+        assert (
+            output_schemas.GRADE_PROBE["properties"]["correction"]
+            == output_schemas.STRING
         )
-        assert not hasattr(session, "_parse_probe_grading"), (
-            "session._parse_probe_grading has landed; see the message above"
-        )
+        assert session._parse_probe_grading(
+            json.dumps({"verdict": "incorrect", "correction": None})
+        ) == (Verdict.INCORRECT, None)
