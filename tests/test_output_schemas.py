@@ -39,6 +39,7 @@ from socratic.domain import profile_builder
 from socratic.domain import prompting
 from socratic.domain import registry as registry_module
 from socratic.domain import session
+from socratic.domain.ids import new_quiz_session_id
 from socratic.domain.records import Verdict
 from socratic.domain.types import Blank, BlankSegment, Quiz
 
@@ -142,7 +143,7 @@ def parse_skeleton(payload, mode):
     if payload.get("type") == authoring.DIRECT_ANSWER:
         return payload, authoring._parse_direct_answer(payload)
     parsed = authoring._parse_quiz(
-        payload, quiz_session_id="quiz-session", mode=mode
+        payload, quiz_session_id=new_quiz_session_id(), mode=mode
     )
     return payload, parsed
 
@@ -150,13 +151,14 @@ def parse_skeleton(payload, mode):
 def parse_pedagogy(payload, mode):
     """Merge into a skeleton built from the payload's own blank ids.
 
-    The merge target is not minted: `_merge_pedagogy` refuses a payload naming a
-    blank the quiz does not declare, which is a fact about two calls agreeing
-    with each other rather than about the schema.
+    The merge target is not a minted *payload*: `_merge_pedagogy` refuses a
+    payload naming a blank the quiz does not declare, which is a fact about two
+    calls agreeing with each other rather than about the schema. Its session id
+    is minted, because `Quiz` insists on a ULID (ADR-0007).
     """
     ids = [entry["blank_id"] for entry in payload["blanks"]]
     quiz = Quiz(
-        quiz_session_id="quiz-session",
+        quiz_session_id=new_quiz_session_id(),
         mode=mode,
         topic="topic",
         explanation=tuple(BlankSegment(blank_id) for blank_id in ids),

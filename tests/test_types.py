@@ -13,6 +13,7 @@ import dataclasses
 
 import pytest
 
+from socratic.domain.ids import Ulid, new_quiz_session_id
 from socratic.domain.modes import DifficultyMode
 from socratic.domain.types import (
     Blank,
@@ -46,14 +47,20 @@ def _advanced_blank(blank_id: str = "b1") -> Blank:
     )
 
 
-def _quiz(*blanks: Blank, explanation: tuple[Segment, ...] | None = None) -> Quiz:
+def _quiz(
+    *blanks: Blank,
+    explanation: tuple[Segment, ...] | None = None,
+    quiz_session_id: str | None = None,
+) -> Quiz:
     blanks = blanks or (_novice_blank(),)
     if explanation is None:
         explanation = (TextSegment("Free energy falls when "),)
         for blank in blanks:
             explanation += (BlankSegment(blank.blank_id), TextSegment(" rises."))
     return Quiz(
-        quiz_session_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        quiz_session_id=(
+            new_quiz_session_id() if quiz_session_id is None else quiz_session_id
+        ),
         mode=blanks[0].mode,
         topic="thermodynamics",
         explanation=explanation,
@@ -143,6 +150,20 @@ class TestBlank:
 
 
 class TestQuiz:
+    def test_the_quiz_session_id_is_a_ulid(self):
+        # ADR-0007: the primary key is a ULID we mint, and `tokens.py` argues
+        # from its timestamp prefix that it is not a credential.
+        quiz = _quiz()
+        assert Ulid.parse(quiz.quiz_session_id).timestamp is not None
+
+    def test_a_non_ulid_quiz_session_id_is_rejected(self):
+        with pytest.raises(ValueError, match="ULID"):
+            _quiz(quiz_session_id="session-1")
+
+    def test_an_empty_quiz_session_id_is_rejected(self):
+        with pytest.raises(ValueError, match="ULID"):
+            _quiz(quiz_session_id="")
+
     def test_blanks_are_addressable_by_id(self):
         quiz = _quiz(_novice_blank("b1"), _novice_blank("b2"))
         assert quiz.blank("b2").blank_id == "b2"
