@@ -23,6 +23,7 @@ from socratic.domain.registry import (
     BlankRange,
     ModePolicy,
     ModeRegistry,
+    UnknownMode,
     default_registry,
     mode_name,
 )
@@ -216,6 +217,43 @@ class TestRegistryLookup:
     def test_an_unregistered_mode_is_an_error(self):
         with pytest.raises(KeyError):
             default_registry().policy_for("expert")
+
+    def test_the_refusal_is_a_key_error_a_caller_can_tell_apart(self):
+        # A `KeyError` still, so every caller that documents one - and the
+        # service handler that turns one into a 404 - is unaffected; a named
+        # one, so the edge can answer this particular one with a 422 instead
+        # (#101).
+        with pytest.raises(UnknownMode) as refusal:
+            default_registry().policy_for("expert")
+
+        assert isinstance(refusal.value, KeyError)
+
+    def test_the_refusal_names_the_mode_and_the_modes_there_are(self):
+        # The sentence the service renders. It is written here, in the only
+        # module entitled to say what modes exist.
+        with pytest.raises(UnknownMode) as refusal:
+            default_registry().key_for("expert")
+
+        assert refusal.value.detail == (
+            "unknown mode: 'expert'; expected one of 'novice', 'advanced'"
+        )
+
+    def test_a_registry_holding_nothing_says_so_rather_than_trailing_off(self):
+        with pytest.raises(UnknownMode) as refusal:
+            ModeRegistry().key_for("novice")
+
+        assert refusal.value.detail.endswith("this registry holds none")
+
+    def test_a_third_mode_is_listed_among_the_admissible_ones(self):
+        # Registering a mode is the whole of adding one, so the refusal has to
+        # learn about it without being edited.
+        registry = default_registry()
+        registry.register("expert", _stub_policy())
+
+        with pytest.raises(UnknownMode) as refusal:
+            registry.key_for("savant")
+
+        assert "'expert'" in refusal.value.detail
 
     def test_the_registry_lists_the_modes_it_knows(self):
         assert set(default_registry().modes()) == {
