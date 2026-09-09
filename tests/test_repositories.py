@@ -38,7 +38,7 @@ AT = datetime(2026, 9, 8, 12, 0, tzinfo=timezone.utc)
 LATER = datetime(2026, 9, 8, 12, 30, tzinfo=timezone.utc)
 
 
-def _quiz() -> Quiz:
+def _quiz(session_id: str | None = None) -> Quiz:
     blank = Blank(
         blank_id="b1",
         mode=DifficultyMode.NOVICE,
@@ -48,7 +48,7 @@ def _quiz() -> Quiz:
         hints=("a", "b", "c"),
     )
     return Quiz(
-        quiz_session_id=str(Ulid.mint()),
+        quiz_session_id=session_id or str(Ulid.mint()),
         mode=DifficultyMode.NOVICE,
         topic="the second law",
         explanation=(TextSegment("Heat flows because "), BlankSegment("b1")),
@@ -60,7 +60,7 @@ def _quiz() -> Quiz:
 def _attempt(learner_id: str = "learner-1", **overrides) -> QuizAttempt:
     # The attempt and its quiz name one session, so the quiz's own id is what
     # goes on the record rather than a second minted one.
-    quiz = overrides.pop("quiz", None) or _quiz()
+    quiz = overrides.pop("quiz", None) or _quiz(overrides.pop("session_id", None))
     fields = dict(
         attempt_id=str(Ulid.mint()),
         learner_id=learner_id,
