@@ -1,0 +1,155 @@
+/* The overlay's own rules. Inlined by `overlay.py`; nothing is fetched.
+ *
+ * No imported stylesheet, no external resource reference, no web font:
+ * ADR-0012 rules out a CDN request and a font fetch, and the tests assert that
+ * on the finished document rather than trusting this comment. Colours are hex;
+ * the code-block palette comes from `markdown.highlight_css()`, inlined beside
+ * this. The font stack is whatever the learner's machine already has.
+ */
+
+/* `hidden` outranks every rule below it. Each panel ships present and hidden so
+ * the client toggles visibility and never builds markup from model-authored
+ * data; a `display:` rule that beat the attribute would show all of them at
+ * once. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  padding: 1rem;
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #14213d;
+  background: #fdfdfb;
+}
+
+.socratic-overlay {
+  max-width: 44rem;
+  margin: 0 auto;
+}
+
+.socratic-topic {
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: #5a6478;
+  margin: 0 0 0.75rem;
+}
+
+/* The explanation arrives as a run of block paragraphs with the blank
+ * placeholders between them — `render_markdown` wraps every text segment in a
+ * `<p>`. Left alone, each blank would read as a paragraph break rather than as
+ * a gap in a sentence, so the direct children flow inline. Fenced code and
+ * lists are `<pre>` and `<ul>` and keep their own block layout. */
+.socratic-explanation > p {
+  display: inline;
+  margin: 0;
+}
+
+.socratic-blank {
+  display: inline-block;
+  min-width: 4.5rem;
+  border-bottom: 2px solid #c0392b;
+  vertical-align: baseline;
+}
+
+.socratic-blank[data-state="active"] {
+  background: #fff3cd;
+}
+
+.socratic-blank[data-state="resolved"] {
+  border-bottom-color: #2e7d32;
+  color: #2e7d32;
+  min-width: 0;
+}
+
+.socratic-control,
+.socratic-probe,
+.socratic-rating,
+.socratic-recap {
+  margin-top: 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #dcdfe6;
+  border-radius: 0.5rem;
+  background: #ffffff;
+}
+
+.socratic-control-prompt {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.socratic-option,
+.socratic-submit,
+.socratic-probe-submit,
+.socratic-probe-dismiss,
+.socratic-score,
+.socratic-rating-dismiss {
+  font: inherit;
+  padding: 0.4rem 0.9rem;
+  margin: 0.2rem 0.3rem 0.2rem 0;
+  border: 1px solid #14213d;
+  border-radius: 0.35rem;
+  background: #f4f6fb;
+  cursor: pointer;
+}
+
+/* An option's text arrives as sanitised Markdown, which is block-level: a
+ * `<p>` inside a button would otherwise stack instead of reading as a label. */
+.socratic-option p,
+.socratic-verdict p:last-child,
+.socratic-probe-question p {
+  display: inline;
+  margin: 0;
+}
+
+.socratic-answer {
+  font: inherit;
+  padding: 0.4rem 0.5rem;
+  min-width: 18rem;
+  border: 1px solid #8a93a6;
+  border-radius: 0.35rem;
+}
+
+.socratic-verdict {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 4px solid #8a93a6;
+  background: #f7f9fc;
+}
+
+.socratic-verdict[data-verdict="correct"] {
+  border-left-color: #2e7d32;
+  background: #eef7ee;
+  animation: socratic-celebrate 600ms ease-out;
+}
+
+.socratic-verdict[data-verdict="incorrect"] {
+  border-left-color: #c0392b;
+  background: #fdf1f0;
+}
+
+/* The celebration the verdict starts. It runs on the response that already
+ * carries the tutor line, because nothing streams (D13). */
+@keyframes socratic-celebrate {
+  from {
+    transform: scale(0.97);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.socratic-pending {
+  color: #7a6a2f;
+  font-style: italic;
+}
+
+.socratic-queued {
+  margin-top: 1.5rem;
+  color: #5a6478;
+  font-size: 0.9rem;
+}

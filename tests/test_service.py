@@ -36,14 +36,17 @@ from socratic.domain.model_client import (  # noqa: E402
     ModelResponse,
     RecordingModelClient,
 )
-from socratic.domain.modes import DifficultyMode  # noqa: E402
+from socratic.domain import session as session_module  # noqa: E402
+from socratic.domain.modes import DifficultyMode, GradingStrategy  # noqa: E402
 from socratic.domain.prompting import CallType  # noqa: E402
+from socratic.domain.records import Verdict  # noqa: E402
 from socratic.domain.repositories import (  # noqa: E402
     InMemoryAttemptRepository,
     InMemoryRatingRepository,
 )
 from socratic.domain.session import QuizSession  # noqa: E402
 from socratic.domain.tokens import TokenMinter  # noqa: E402
+from socratic.service import payloads  # noqa: E402
 from socratic.service.app import create_app  # noqa: E402
 from socratic.service.deps import ServiceDependencies  # noqa: E402
 
@@ -612,6 +615,85 @@ class TestRating:
         )
 
         assert second.status_code == 409
+
+
+class TestTheAdvancedTutorLine:
+    """The reactive tutor line rides the grading response (D13, ADR-0013).
+
+    `Submission.model_grading.tutor_line` has existed since #8 and is tested in
+    the domain, but until #13 it had no field to travel in — so the overlay had
+    no way to show the one piece of feedback Advanced has. It is rendered like
+    every other string that reaches a browser.
+
+    Driven against `payloads.submission_body` rather than through `/answers`,
+    because an Advanced answer cannot currently be submitted through the
+    service at all: `/quizzes` hands `QuizAuthoring` the mode as a plain
+    string, so `Quiz.mode` is a `str` and segment 2's `quiz.mode.value` raises.
+    That is a bug in the route, not in this field, and it is filed rather than
+    fixed here.
+    """
+
+    def _submission(self, model_grading):
+        return session_module.Submission(
+            verdict=Verdict.CORRECT,
+            graded_by=GradingStrategy.MODEL_GRADED,
+            hint_rung_shown=None,
+            feedback=None,
+            revealed_option_id=None,
+            blank_resolved=True,
+            attempt_sealed=False,
+            model_grading=model_grading,
+        )
+
+    def test_the_tutor_line_rides_the_grading_response(self):
+        body = payloads.submission_body(
+            self._submission(
+                session_module.ModelGrading(
+                    tutor_line="You reached for the macro picture.",
+                    probe_question=None,
+                )
+            ),
+            capability_token="rotated",
+        )
+
+        assert "You reached for the macro picture." in body["tutor_line_html"]
+
+    def test_a_model_graded_answer_without_one_carries_null(self):
+        body = payloads.submission_body(
+            self._submission(
+                session_module.ModelGrading(tutor_line=None, probe_question=None)
+            ),
+            capability_token="rotated",
+        )
+
+        assert body["tutor_line_html"] is None
+
+    def test_the_deterministic_path_has_no_tutor_line_at_all(self):
+        """Not merely null: the deterministic strategy never builds a
+        `ModelGrading`, so there is nothing for the field to be filled from."""
+        body = payloads.submission_body(
+            self._submission(None), capability_token="rotated"
+        )
+
+        assert body["tutor_line_html"] is None
+
+    def test_the_field_is_on_the_wire_for_a_novice_answer(self, authored):
+        """The overlay reads this key unconditionally, so it has to be present
+        on the path that never fills it."""
+        harness, quiz, token = authored
+
+        response = harness.client.post(
+            "/answers",
+            json={
+                "quiz_session_id": quiz["quiz_session_id"],
+                "blank_id": "b1",
+                "submitted": CORRECT_OPTION_ID,
+            },
+            headers={"X-Socratic-Token": token},
+        )
+
+        assert response.json()["tutor_line_html"] is None
+        harness.model.assert_never_called(CallType.GRADE_ANSWER)
 
 
 # --- Configuration -----------------------------------------------------------
