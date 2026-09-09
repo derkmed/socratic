@@ -27,6 +27,7 @@ import abc
 from socratic.domain.ids import QuizSessionId
 from socratic.domain.profiles import LearnerProfile
 from socratic.domain.records import QuizAttempt, RatingRecord
+from socratic.domain.settings import LearnerSettings
 
 
 class AttemptRepository(abc.ABC):
@@ -103,6 +104,30 @@ class LearnerProfileRepository(abc.ABC):
     @abc.abstractmethod
     def get(self, learner_id: str) -> LearnerProfile | None:
         """The learner's profile, or `None` before the job has ever run."""
+
+
+
+class LearnerSettingsRepository(abc.ABC):
+    """One `LearnerSettings` document per learner, rewritten in place.
+
+    The settings of record, so a request carrying none — which is every request
+    the iframe makes, since the iframe cannot see `UserValves` — can still be
+    served the learner's current ones (#14, ADR-0010).
+    """
+
+    @abc.abstractmethod
+    def save(self, settings: LearnerSettings) -> None:
+        """Write the learner's settings, replacing any previous ones."""
+
+    @abc.abstractmethod
+    def get(self, learner_id: str) -> LearnerSettings | None:
+        """The learner's settings, or `None` if they have never been recorded.
+
+        `None` rather than the defaults: "never set" and "set to the defaults"
+        are the same behaviour but not the same fact, and the answering path
+        needs to tell them apart to know whether to fall back to the attempt's
+        `probe_cadence_at_authoring`.
+        """
 
 
 class InMemoryAttemptRepository(AttemptRepository):
@@ -195,3 +220,16 @@ class InMemoryLearnerProfileRepository(LearnerProfileRepository):
 
     def get(self, learner_id: str) -> LearnerProfile | None:
         return self._profiles.get(learner_id)
+
+
+class InMemoryLearnerSettingsRepository(LearnerSettingsRepository):
+    """Settings held by learner id."""
+
+    def __init__(self) -> None:
+        self._settings: dict[str, LearnerSettings] = {}
+
+    def save(self, settings: LearnerSettings) -> None:
+        self._settings[settings.learner_id] = settings
+
+    def get(self, learner_id: str) -> LearnerSettings | None:
+        return self._settings.get(learner_id)
