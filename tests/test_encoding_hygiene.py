@@ -227,13 +227,42 @@ def test_the_guard_reads_the_mode_argument_of_open_in_either_form():
     assert _offending_lines("open('bench.txt')\n") == [1]
 
 
-def test_no_test_module_reads_a_file_with_the_locale_codec():
-    offenders = {}
-    for path in sorted(TESTS_ROOT.glob("*.py")):
+def _offending_modules(root: pathlib.Path) -> dict[str, list[int]]:
+    """The guard's verdict for every module under `root`, keyed by relative path.
+
+    Walks recursively (`rglob`, not `glob`) so a module in a subdirectory of
+    `root` is not silently exempt from the scan — `tests/` is flat today, but
+    nothing should depend on that staying true. `__pycache__` holds compiled
+    bytecode, not source, but is skipped explicitly for the same reason
+    `_domain_module_names` in `test_import_hygiene.py` skips it: a directory
+    that is not a Python module should never end up keyed in the result.
+    """
+    offenders: dict[str, list[int]] = {}
+    for path in sorted(root.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
         source = path.read_text(encoding="utf-8")
         lines = _text_reads_without_encoding(ast.parse(source))
         if lines:
-            offenders[path.name] = lines
+            offenders[str(path.relative_to(root))] = lines
+    return offenders
+
+
+def test_the_guard_walks_subdirectories_of_the_root(tmp_path):
+    # tests/ is flat today, so this is the only thing that exercises the walk
+    # against a subdirectory at all: without it, a violation placed anywhere
+    # but the top level of `root` would pass silently.
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    _write_utf8(nested / "test_probe.py", "pathlib.Path('x').read_text()\n")
+
+    offenders = _offending_modules(tmp_path)
+
+    assert offenders == {str(pathlib.Path("nested", "test_probe.py")): [1]}
+
+
+def test_no_test_module_reads_a_file_with_the_locale_codec():
+    offenders = _offending_modules(TESTS_ROOT)
 
     assert offenders == {}, (
         "text reads without an explicit encoding decode through the machine's "
