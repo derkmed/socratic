@@ -214,7 +214,14 @@ def _queued(topics: Sequence[str]) -> str:
 
 
 def _document(*, title: str, body: str, script: str = "") -> str:
-    """The shared chrome. One document, no external reference of any kind."""
+    """The shared chrome. One document, no external reference of any kind.
+
+    Every document reports its own height (#116), whichever branch rendered
+    it: all three go into a `srcdoc` frame sandboxed without
+    `allow-same-origin`, where the host's own measurement throws and a
+    document that says nothing is given no height at all.
+    """
+    script = f"{script}<script>\n{_asset('height.js')}\n</script>\n"
     return (
         "<!doctype html>\n"
         '<html lang="en">\n'

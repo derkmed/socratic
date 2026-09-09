@@ -129,6 +129,51 @@ class TestTheDocument:
         assert "SocraticQuiz" in document
         assert "mount(document)" in document
 
+    def test_every_document_reports_its_own_height(self):
+        """#116: the frame is sized by the document or not at all.
+
+        Open WebUI's `FullHeightIframe` reads `contentDocument.scrollHeight`
+        first, which throws for a `srcdoc` frame sandboxed without
+        `allow-same-origin` — every frame ours renders in. Its only other
+        source is a `postMessage` from inside, so a document that does not
+        send one renders at no height and looks like a failure.
+        """
+        for document in (
+            render(),
+            overlay.render_direct_answer(
+                {
+                    "kind": "direct_answer",
+                    "topic": "chest pain",
+                    "answer_html": "<p>Call emergency services now.</p>",
+                    "queued_topics": [],
+                }
+            ),
+            overlay.render_queued(
+                {
+                    "kind": "queued",
+                    "inquiry": "What is enthalpy?",
+                    "quiz_session_id": "01J000000000000000000000AA",
+                    "topic": "the second law",
+                    "queued_topics": ["What is enthalpy?"],
+                }
+            ),
+        ):
+            assert "iframe:height" in document
+            assert "postMessage" in document
+
+    def test_the_height_is_measured_from_the_content_not_the_document(self):
+        """The naive measure feeds back.
+
+        Once the parent sets the frame to height H, `documentElement`'s own
+        `scrollHeight` *is* H, so reporting it re-reports the height we were
+        just given and any body padding adds to it on every pass. Observed
+        ratcheting without bound before this was written, so the measure is
+        over the body's children, whose boxes do not grow when the frame does.
+        """
+        document = render()
+
+        assert "documentElement.scrollHeight" not in document
+
     def test_hidden_beats_the_stylesheet(self):
         """Every panel ships present and hidden so the client only toggles
         visibility. A `display:` rule that outranked `hidden` would show all of
@@ -368,11 +413,19 @@ class TestTheQueuedBranch:
 
     def test_it_carries_no_client_and_nothing_to_submit(self):
         """No token was minted for it, so there is nothing for a script to
-        authorize with and no control that could spend one."""
+        authorize with and no control that could spend one.
+
+        The height reporter is the one script every document carries (#116)
+        and is deliberately not covered here: it makes no request, reads no
+        token and offers the learner nothing to press. The claim is that this
+        document cannot *talk to the service*, which is asserted on the client,
+        the controls and the two data attributes below rather than on the
+        presence of a `<script>` tag.
+        """
         document = self._queued()
 
         assert "SocraticQuiz" not in document
-        assert "<script" not in document
+        assert "fetch(" not in document
         assert '<section class="socratic-control"' not in document
         assert "data-capability-token" not in document
         assert "data-service-base-url" not in document

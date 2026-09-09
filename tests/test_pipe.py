@@ -183,6 +183,19 @@ class RecordingTransport:
         assert self.calls == [], f"the service was called: {self.calls}"
 
 
+class RecordingEmitter:
+    """Open WebUI's `__event_emitter__`, recorded rather than dispatched."""
+
+    def __init__(self, raises: Exception | None = None) -> None:
+        self.raises = raises
+        self.events: list[dict] = []
+
+    async def __call__(self, event):
+        self.events.append(event)
+        if self.raises is not None:
+            raise self.raises
+
+
 def make_pipe(pipe_module, transport):
     pipe = pipe_module.Pipe(post=transport)
     pipe.valves.service_url = SERVICE_URL
@@ -193,25 +206,13 @@ def make_pipe(pipe_module, transport):
 def run(pipe, **kwargs):
     import asyncio
 
+    # The host hands every real turn an emitter, so the default belongs here
+    # rather than in each test. Pass one explicitly to assert on it.
+    kwargs.setdefault("__event_emitter__", RecordingEmitter())
     return asyncio.run(pipe.pipe(body=BODY, __user__=USER, **kwargs))
 
 
 class TestTheRoundTrip:
-    def test_the_overlay_comes_back_verbatim_and_inline(self, pipe_module):
-        # Master spec §12: the Pipe "returns the `HTMLResponse` the service
-        # rendered with `Content-Disposition: inline`". Byte-identical,
-        # because everything in it was sanitised in the service before it left
-        # (ADR-0012) and the Pipe has no business touching it.
-        transport = RecordingTransport()
-
-        response = run(make_pipe(pipe_module, transport))
-
-        assert response.status_code == 200
-        assert response.body.decode("utf-8") == OVERLAY
-        assert response.headers["content-disposition"] == "inline"
-        assert "text/html" in response.headers["content-type"]
-        assert "charset=utf-8" in response.headers["content-type"]
-
     def test_the_request_names_the_learner_the_inquiry_and_the_mode(
         self, pipe_module
     ):
@@ -253,6 +254,88 @@ class TestTheRoundTrip:
         headers = transport.calls[0]["headers"]
         assert headers["X-Socratic-Service-Token"] == SERVICE_TOKEN
         assert "X-Socratic-Token" not in headers
+
+
+class TestTheOverlayReachesTheChatAsAnEmbed:
+    """#116: a Pipe's *return value* cannot carry an overlay.
+
+    Open WebUI's Pipe path dispatches on `str`, `dict`, `BaseModel`,
+    `StreamingResponse`, `Iterator` and `AsyncGenerator` — an `HTMLResponse`
+    matches none of them, so it fell through every branch and the learner got
+    an empty message with nothing logged anywhere. The iframe render lives on
+    the `embeds` event instead, which a Pipe reaches through
+    `__event_emitter__`, and which the frontend renders verbatim as `srcdoc`.
+    """
+
+    def test_the_overlay_is_emitted_as_an_embeds_event_verbatim(
+        self, pipe_module
+    ):
+        transport = RecordingTransport()
+        emitter = RecordingEmitter()
+
+        run(make_pipe(pipe_module, transport), __event_emitter__=emitter)
+
+        assert len(emitter.events) == 1
+        event = emitter.events[0]
+        assert event["type"] == "embeds"
+        # Byte-identical, for the same reason the return value used to be:
+        # the service sanitised it and the Pipe holds no domain logic.
+        assert event["data"]["embeds"] == [OVERLAY]
+
+    def test_the_embed_replaces_rather_than_accumulates(self, pipe_module):
+        # Without `replace`, `socket/main.py` extends the message's existing
+        # embeds, so a re-run would stack a second quiz under the first.
+        transport = RecordingTransport()
+        emitter = RecordingEmitter()
+
+        run(make_pipe(pipe_module, transport), __event_emitter__=emitter)
+
+        assert emitter.events[0]["data"]["replace"] is True
+
+    def test_it_returns_a_string_so_the_stream_terminates(self, pipe_module):
+        # The return value is no longer the payload, but it still has to be a
+        # type the Pipe path understands. It carries no overlay text: the
+        # quiz is in the frame, and reprinting it in the transcript is what
+        # ADR-0001 rules out.
+        transport = RecordingTransport()
+        emitter = RecordingEmitter()
+
+        returned = run(
+            make_pipe(pipe_module, transport), __event_emitter__=emitter
+        )
+
+        assert isinstance(returned, str)
+        assert OVERLAY not in returned
+
+    def test_a_host_without_an_emitter_is_told_so_and_not_left_blank(
+        self, pipe_module
+    ):
+        # An empty message with no explanation is the exact failure #116
+        # describes. If the host hands us no emitter there is no way to show
+        # a quiz, so say that rather than reproduce the silence.
+        import asyncio
+
+        transport = RecordingTransport()
+        pipe = make_pipe(pipe_module, transport)
+
+        message = asyncio.run(pipe.pipe(body=BODY, __user__=USER))
+
+        assert isinstance(message, str)
+        assert message.strip() != ""
+        assert SERVICE_TOKEN not in message
+        transport.assert_never_called()
+
+    def test_an_emitter_that_raises_becomes_a_plain_message(self, pipe_module):
+        transport = RecordingTransport()
+        emitter = RecordingEmitter(raises=RuntimeError(SERVICE_TOKEN))
+
+        message = run(
+            make_pipe(pipe_module, transport), __event_emitter__=emitter
+        )
+
+        assert isinstance(message, str)
+        assert SERVICE_TOKEN not in message
+        assert "Traceback" not in message
 
 
 class TestTheFailurePaths:
@@ -336,12 +419,15 @@ class TestOpenWebUIsOwnTaskCalls:
 
     def test_an_ordinary_turn_names_no_task_and_is_authored(self, pipe_module):
         transport = RecordingTransport()
+        emitter = RecordingEmitter()
 
-        response = run(
-            make_pipe(pipe_module, transport), __metadata__={"chat_id": "c-1"}
+        run(
+            make_pipe(pipe_module, transport),
+            __metadata__={"chat_id": "c-1"},
+            __event_emitter__=emitter,
         )
 
-        assert response.body.decode("utf-8") == OVERLAY
+        assert emitter.events[0]["data"]["embeds"] == [OVERLAY]
         assert len(transport.calls) == 1
 
 
@@ -523,12 +609,17 @@ class TestThereIsNoEventCallAnswerPath:
         assert "__event_call__" not in _code_strings(pipe_tree)
 
     def test_pipe_does_not_accept_it_as_a_parameter(self, pipe_module):
+        # `__event_emitter__` is deliberately *not* covered by this rule. The
+        # two are different mechanisms: `__event_call__` blocks the coroutine
+        # on a modal in the parent page, which is the architecture ADR-0015
+        # rules out, while the emitter is a one-way sink the overlay rides to
+        # the frame it renders in (#116).
         import inspect
 
         parameters = inspect.signature(pipe_module.Pipe.pipe).parameters
 
         assert "__event_call__" not in parameters
-        assert "__event_emitter__" not in parameters
+        assert "__event_emitter__" in parameters
 
 
 class TestTheReadmeStatesTheConstraint:
