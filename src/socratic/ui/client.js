@@ -34,6 +34,12 @@ var SocraticQuiz = (function () {
 
   var CORRECT = "correct";
 
+  /* The two strings a reveal puts on screen. Wording, not decision: what a
+   * reveal *is* is settled in the state machine, and these are the only words
+   * the DOM half chooses for itself beyond the verdict line. */
+  var SEE_THE_NOTE = "— see the note";
+  var CARRY_ON = "You can now continue with these answers in mind.";
+
   /* --- The transport ------------------------------------------------------ */
 
   /* `fetch`, with the capability token in a header.
@@ -170,7 +176,14 @@ var SocraticQuiz = (function () {
          * than handed a null to render. */
         pedagogyPending: feedbackHtml === null,
         rung: reply.hint_rung_shown === undefined ? null : reply.hint_rung_shown,
-        revealedOptionId: orNull(reply.revealed_option_id)
+        revealedOptionId: orNull(reply.revealed_option_id),
+        /* A rung-three close: the blank closed and the learner did not get it
+         * right, so this response carries the reveal (CONTEXT: Reveal) and the
+         * note is where the answer is named. Derived from the verdict rather
+         * than from `hint_rung_shown === 3` because what matters is that the
+         * blank closed unearned. True in both modes — the client cannot see
+         * the mode and does not need to. */
+        reveal: reply.verdict !== CORRECT && Boolean(reply.blank_resolved)
       };
 
       /* The verdict starts the celebration. It comes first because it is what
@@ -186,13 +199,14 @@ var SocraticQuiz = (function () {
         resolved[blankId] = true;
         /* What goes in the gap. The service sends no resolved text on a
          * correct answer — there is no field for one — so it is what the
-         * learner got right, and on a rung-three reveal it is the revealed
-         * option instead, because what they submitted was wrong (ADR-0009).
-         * A finished quiz whose blanks are all empty is the "silent blank"
-         * master acceptance 31 forbids. */
+         * learner got right. On a reveal it is nothing at all: what they
+         * submitted was wrong, and the revealed option would be asserting an
+         * answer in the sentence they failed to complete (#112). The gap says
+         * so rather than standing empty, so master acceptance 31's "silent
+         * blank" is still not what a finished quiz shows. */
         view.resolveBlank({
           blankId: blankId,
-          answer: event.revealedOptionId || submitted
+          answer: event.reveal ? null : submitted
         });
         advance();
       }
@@ -339,14 +353,25 @@ var SocraticQuiz = (function () {
         verdict.querySelector(".socratic-pedagogy-pending"),
         event.pedagogyPending
       );
+      /* The note carries the whole disclosure, because the gap no longer
+       * carries any of it (#112). It shows on every reveal, not only on one
+       * with an option id: where the reveal is prose it arrives in the
+       * feedback block directly above and carries no option id at all
+       * (ADR-0003), and leaving the note hidden there would close the blank
+       * with nothing telling the learner it is closed. */
       var reveal = verdict.querySelector(".socratic-reveal");
-      if (event.revealedOptionId) {
-        var option = root.querySelector(
-          '.socratic-option[data-option-id="' + event.revealedOptionId + '"]'
+      if (event.reveal) {
+        var option = event.revealedOptionId
+          ? root.querySelector(
+              '.socratic-option[data-option-id="' + event.revealedOptionId + '"]'
+            )
+          : null;
+        setHtml(
+          reveal,
+          (option ? "The answer: " + option.innerHTML + " " : "") + CARRY_ON
         );
-        setHtml(reveal, "The answer: " + (option ? option.innerHTML : ""));
       }
-      show(reveal, Boolean(event.revealedOptionId));
+      show(reveal, Boolean(event.reveal));
     }
 
     return {
@@ -359,21 +384,30 @@ var SocraticQuiz = (function () {
       resolveBlank: function (event) {
         var placeholder = placeholderFor(event.blankId);
         if (placeholder) {
-          placeholder.setAttribute("data-state", "resolved");
-          var option = root.querySelector(
-            '.socratic-option[data-option-id="' + event.answer + '"]'
-          );
-          if (option) {
-            /* The option's label, already sanitised in the service, and
-             * inline: `payloads.label_html` renders a phrase with no block
-             * wrapper (#98), so what lands in this inline placeholder is
-             * inline markup rather than a `<p>` with paragraph margins. */
-            setHtml(placeholder, option.innerHTML);
+          if (event.answer === null) {
+            /* Closed, and asserting nothing: the learner did not earn this
+             * gap, and the note above it is where the answer is. A marker
+             * rather than an empty span, so the finished quiz still has no
+             * silent blank in it. */
+            placeholder.setAttribute("data-state", "closed");
+            placeholder.textContent = SEE_THE_NOTE;
           } else {
-            /* Free text the learner typed. Text, never markup: it is the one
-             * string in this document that did not come through the service's
-             * sanitiser. */
-            placeholder.textContent = event.answer;
+            placeholder.setAttribute("data-state", "resolved");
+            var option = root.querySelector(
+              '.socratic-option[data-option-id="' + event.answer + '"]'
+            );
+            if (option) {
+              /* The option's label, already sanitised in the service, and
+               * inline: `payloads.label_html` renders a phrase with no block
+               * wrapper (#98), so what lands in this inline placeholder is
+               * inline markup rather than a `<p>` with paragraph margins. */
+              setHtml(placeholder, option.innerHTML);
+            } else {
+              /* Free text the learner typed. Text, never markup: it is the one
+               * string in this document that did not come through the
+               * service's sanitiser. */
+              placeholder.textContent = event.answer;
+            }
           }
         }
         show(controlFor(event.blankId), false);

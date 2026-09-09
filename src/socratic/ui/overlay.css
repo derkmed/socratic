@@ -86,6 +86,15 @@ body {
   min-width: 0;
 }
 
+/* Closed on a reveal: the blank is done with, and it asserts no answer (#112).
+ * Muted and italic rather than the resolved state's accent, so a gap the
+ * learner earned and one they did not are not the same green. */
+.socratic-blank[data-state="closed"] {
+  color: var(--muted);
+  font-style: italic;
+  min-width: 0;
+}
+
 .socratic-control,
 .socratic-probe,
 .socratic-rating,

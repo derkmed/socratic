@@ -405,9 +405,10 @@ class TestTheVerdict:
 
         assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
 
-    def test_a_rung_three_reveal_fills_the_gap_with_the_revealed_option(self):
-        """Not with what the learner typed — they got it wrong, and the reveal
-        is the one sanctioned disclosure of the key (ADR-0009)."""
+    def test_a_rung_three_novice_close_puts_nothing_in_the_gap(self):
+        """Not the revealed option either (#112). The reveal names the answer
+        in the note, and a blank the learner did not earn reads the same way in
+        both modes: closed, asserting nothing."""
         emitted = run_js(
             """
             const client = clientWith([%s]);
@@ -422,7 +423,117 @@ class TestTheVerdict:
             )
         )
 
-        assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
+        assert only(emitted, "resolveBlank")["args"][0]["answer"] is None
+
+    def test_a_rung_three_advanced_close_never_writes_the_wrong_answer_in(self):
+        """The bug #112 reports. An Advanced blank carries no option id at all —
+        its rubric is the answer key and must not be returned (ADR-0003) — so
+        the gap used to fall through to what the learner submitted, which on a
+        rung-three close is by definition wrong."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'enthalpy');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                feedback_html="<p>It is entropy.</p>",
+                revealed_option_id=None,
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["answer"] is None
+        assert "enthalpy" not in json.dumps(only(emitted, "resolveBlank"))
+
+    def test_a_rung_three_close_still_closes_the_blank_and_moves_on(self):
+        """Asserting nothing is not the same as staying open. Rung three closes
+        the blank (ADR-0009) and the learner goes to the next one."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s], { blankIds: ['b1', 'b2'] });
+            await client.submitAnswer('b1', 'enthalpy');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                revealed_option_id=None,
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["blankId"] == "b1"
+        assert only(emitted, "activateBlank")["args"][0] == "b2"
+
+    def test_a_wrong_answer_that_leaves_the_blank_open_resolves_nothing(self):
+        """Rungs one and two say nothing about the gap; the blank is still the
+        learner's to answer."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o2');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=2,
+                blank_resolved=False,
+            )
+        )
+
+        assert "resolveBlank" not in call_names(emitted)
+
+    def test_the_grade_event_says_when_a_blank_closed_on_a_reveal(self):
+        """What the note keys off. It is derived from the verdict rather than
+        from the rung, because what matters is that the blank closed without
+        the learner getting it right — true in both modes, and the client
+        cannot see the mode."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o2');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=3,
+                revealed_option_id="o1",
+                blank_resolved=True,
+            )
+        )
+
+        assert only(emitted, "showHint")["args"][0]["reveal"] is True
+
+    def test_a_correct_answer_is_not_a_reveal(self):
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o1');
+            emit({});
+            """
+            % graded()
+        )
+
+        assert only(emitted, "celebrate")["args"][0]["reveal"] is False
+
+    def test_a_wrong_answer_on_an_open_blank_is_not_a_reveal(self):
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o2');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                hint_rung_shown=1,
+                blank_resolved=False,
+            )
+        )
+
+        assert only(emitted, "showHint")["args"][0]["reveal"] is False
 
 
 class TestTheLatePedagogyWindow:
