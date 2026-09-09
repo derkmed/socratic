@@ -184,6 +184,59 @@ class TestTheDocument:
                          document)
 
 
+class TestAClosedBlankIsNeverSilent:
+    """[#130](https://github.com/derkmed/socratic/issues/130), the follow-up
+    ADR-0019 left open.
+
+    A blank can close with nothing to put in it: on the model-graded path rung
+    three closes the blank whether or not `revealed_answer` arrived, and
+    `_safe_revealed_answer` may drop the one that did. ADR-0019 chose an empty
+    gap over the learner's wrong guess, which was right — but master acceptance
+    31 forbids a *silent* blank, and an unexplained hole in the finished
+    passage is one.
+
+    Requiring the field at rung three instead is not available: ADR-0004 records
+    that `strict: true` holds structurally but "cannot enforce **conditional**
+    invariants", and the custody guard can drop a well-formed reveal anyway. So
+    the gap has to be able to say what happened.
+
+    The affordance is CSS over the state the view already sets, which is why it
+    adds no logic to `createDomView` - the layer that shipped #127 precisely
+    because it is untested by construction.
+    """
+
+    def test_a_resolved_blank_with_nothing_in_it_says_so(self):
+        document = render()
+
+        assert re.search(
+            r"\.socratic-blank\[data-state=.resolved.\]:empty::after[^{]*\{"
+            r"[^}]*content:",
+            document,
+        )
+
+    def test_the_words_are_the_overlays_own(self):
+        """Not the model's. The overlay writes its own chrome - "Your answer",
+        "Blank 1 of 3" - and this is chrome: it describes what happened to the
+        exercise, not the subject being taught."""
+        document = render()
+
+        assert "not answered" in document
+
+    def test_a_blank_still_waiting_is_not_labelled(self):
+        """`:empty` is true of an unanswered placeholder too, so the rule has to
+        be pinned to the resolved state or every gap in a fresh quiz would
+        announce itself as unanswered."""
+        document = render()
+
+        rule = re.search(
+            r"\.socratic-blank\[data-state=.resolved.\]:empty::after[^{]*\{"
+            r"[^}]*\}",
+            document,
+        )
+        assert rule, "the rule is missing entirely"
+        assert "active" not in rule.group(0)
+
+
 class TestTheSessionAndItsToken:
     def test_the_document_carries_the_session_the_token_and_the_service_url(self):
         document = render()

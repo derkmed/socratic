@@ -86,6 +86,25 @@ body {
   min-width: 0;
 }
 
+/* A blank can close with nothing to put in it (#130): rung three closes it
+ * whether or not the model sent a short-form reveal, and the custody guard may
+ * drop the one it did send. ADR-0019 chose an empty gap over the learner's
+ * wrong guess; this stops that gap being a *silent* one, which master
+ * acceptance 31 forbids.
+ *
+ * Pinned to the resolved state on purpose. `:empty` is true of a placeholder
+ * nobody has reached yet, so without the state every gap in a fresh quiz would
+ * announce itself as unanswered.
+ *
+ * The words are the overlay's own, like "Your answer" and "Blank 1 of 3", and
+ * they live here rather than in `createDomView` so the fix adds no logic to
+ * the one layer that is untested by construction. */
+.socratic-blank[data-state="resolved"]:empty::after {
+  content: "not answered";
+  color: var(--muted);
+  font-style: italic;
+}
+
 .socratic-control,
 .socratic-probe,
 .socratic-rating,
