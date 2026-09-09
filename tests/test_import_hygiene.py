@@ -18,6 +18,7 @@ import os
 import pathlib
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
 
 try:  # tomllib is 3.11+; the dev extra carries the backport for 3.10.
     import tomllib
@@ -39,17 +40,41 @@ ANTHROPIC_ADAPTER = pathlib.Path("adapters") / "anthropic_client.py"
 """The one module allowed to import the SDK (master spec §5, ticket #7)."""
 
 
+def _python_sources(
+    root: pathlib.Path | None = None,
+) -> Iterator[tuple[pathlib.Path, str]]:
+    """Every Python module under `root`, as `(path relative to root, source)`.
+
+    The one place the tree is read. Taking `root` as an argument — and yielding
+    source rather than paths — is what lets a guard be pointed at source that
+    breaks its own rule; see `_relative_import_offenders` (#84).
+
+    `None` rather than `SOURCE_ROOT` as the default, resolved on each call: a
+    default argument binds once at definition, which would put the module
+    constant out of reach of `monkeypatch.setattr`, and
+    `tests/test_encoding_hygiene.py` redirects exactly that constant at a
+    `tmp_path` to prove the scans decode UTF-8 source.
+    """
+    root = SOURCE_ROOT if root is None else root
+    for path in sorted(root.rglob("*.py")):
+        yield path.relative_to(root), path.read_text(encoding="utf-8")
+
+
 def _imported_roots() -> dict[pathlib.Path, set[str]]:
     """The top-level package each module imports, per file."""
     per_file: dict[pathlib.Path, set[str]] = {}
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path, source in _python_sources():
         roots: set[str] = set()
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):
                 roots.update(alias.name.split(".")[0] for alias in node.names)
+            # Absolute `from` imports only. Sound because
+            # `test_no_module_uses_a_relative_import` holds the package to
+            # having none (#84) — without it a relative import is simply
+            # invisible here.
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 roots.add(node.module.split(".")[0])
-        per_file[path.relative_to(SOURCE_ROOT)] = roots
+        per_file[path] = roots
     return per_file
 
 
@@ -327,15 +352,18 @@ def _imported_submodules() -> dict[pathlib.Path, set[str]]:
     only top-level roots and is depended on by the guards above.
     """
     per_file: dict[pathlib.Path, set[str]] = {}
-    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+    for path, source in _python_sources():
         found: set[str] = set()
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        for node in ast.walk(ast.parse(source)):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     found.update(_socratic_child(alias.name))
+            # Absolute `from` imports only — see `_imported_roots`. This is the
+            # scan `test_the_domain_does_not_import_the_service` reads, and the
+            # one whose rule a relative reach would walk around (#84).
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
                 found.update(_socratic_child(node.module))
-        per_file[path.relative_to(SOURCE_ROOT)] = found
+        per_file[path] = found
     return per_file
 
 
@@ -344,3 +372,85 @@ def _socratic_child(dotted: str) -> set[str]:
     if len(parts) >= 2 and parts[0] == "socratic":
         return {parts[1]}
     return set()
+
+
+# --- The scans' own precondition (issue #84) ---------------------------------
+#
+# Both scans above count only *absolute* `from` imports: `node.level == 0`
+# drops `from ..service import app`, and `and node.module` drops
+# `from . import service` whatever its level. Rather than teach each scan to
+# resolve a relative level against its file's package — partial, per-scan, and
+# one more place to leave a hole — the package is held to the rule the two
+# clauses already assume. `src/socratic/` has never had a relative import; this
+# is what says so out loud, and what makes `level == 0` a true statement rather
+# than a bug.
+
+
+def _relative_import_offenders(
+    sources: Iterable[tuple[pathlib.Path, str]],
+) -> dict[str, list[str]]:
+    """Every relative `from` import in `sources`, per file.
+
+    Takes `(path, source)` pairs rather than reading the tree, so the rule can
+    be exercised against source that *breaks* it. A guard that can only ever
+    see a package already obeying it passes whether or not it works — which is
+    how the hole this closes survived in the first place (#84).
+    """
+    offenders: dict[str, list[str]] = {}
+    for path, source in sources:
+        found = [
+            "from {}{} import {}".format(
+                "." * node.level,
+                node.module or "",
+                ", ".join(alias.name for alias in node.names),
+            )
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.ImportFrom) and node.level > 0
+        ]
+        if found:
+            offenders[str(path)] = sorted(found)
+    return offenders
+
+
+def test_the_relative_import_scan_reports_a_reach_across_the_seam():
+    # The regression test for the guard below, and the reproduction of #84: a
+    # domain module reaching back into the service *relatively* is exactly the
+    # statement `test_the_domain_does_not_import_the_service` cannot see. Both
+    # forms are here because they are dropped by different clauses — `level`
+    # for the first, a null `module` for the second.
+    dotted = pathlib.Path(DOMAIN_PACKAGE) / "quiz.py"
+    bare = pathlib.Path(DOMAIN_PACKAGE) / "session.py"
+
+    offenders = _relative_import_offenders(
+        [
+            (dotted, "from ..service import app\n"),
+            (bare, "from . import service\n"),
+            (pathlib.Path(DOMAIN_PACKAGE) / "ids.py", "from socratic.domain import x\n"),
+        ]
+    )
+
+    assert offenders == {
+        str(dotted): ["from ..service import app"],
+        str(bare): ["from . import service"],
+    }
+
+
+def test_no_module_uses_a_relative_import():
+    """The precondition the two AST scans above are written against.
+
+    Not a style rule — or not only one. `_imported_roots` and
+    `_imported_submodules` both skip relative imports, so with one in the tree
+    `test_the_domain_does_not_import_the_service` would let a domain module
+    reach back into the service and put FastAPI below the portability seam with
+    every guard still green (#84, CONTEXT: Portability seam). Deleting this
+    guard reopens that hole; teach the scans to resolve relative levels first.
+    """
+    sources = list(_python_sources())
+    assert sources, "no source files walked; the guard would be vacuous"
+
+    offenders = _relative_import_offenders(sources)
+
+    assert offenders == {}, (
+        "relative imports are invisible to the AST scans in this file, which "
+        f"makes the portability seam unguarded (#84): {offenders}"
+    )
