@@ -108,7 +108,7 @@ not emit either.
 ## Out of scope
 
 - **The iframe document itself** — the `<html>` shell, the `srcdoc`, the CSS,
-  the answer controls. Issue #19 owns the UI; this ticket produces HTML
+  the answer controls. Issue #13 owns the quiz UI; this ticket produces HTML
   fragments. `BlankSegment` renders to a neutral placeholder element carrying
   the blank id, not to an option bank or a text input, because choosing between
   those is a `ModePolicy.render_hint` decision and belongs where the control is
