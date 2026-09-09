@@ -56,6 +56,21 @@ class Queued:
     attempt: QuizAttempt
     inquiry: str
 
+    @property
+    def others(self) -> tuple[str, ...]:
+        """The queue as a reader should show it: everything *but* this inquiry.
+
+        `raise_inquiry` puts the question on the attempt's queue before
+        building this, because the queue is what persists it - so
+        `attempt.queued_topics` legitimately contains `inquiry`, and a renderer
+        that showed the queue whole would list the question it is already
+        announcing as a sibling of itself.
+
+        The same exclusion `_start` makes when it carries a queue forward past
+        the question being started, for the same reason.
+        """
+        return _without(self.attempt.queued_topics, self.inquiry)
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Started:

@@ -171,9 +171,20 @@ class TestTheQuizBranch:
         assert result.topic == "the second law of thermodynamics"
         assert result.mode is DifficultyMode.NOVICE
         assert result.recap.startswith("Entropy never decreases")
-        assert result.queued_topics == ("the third law",)
         # It really went through the registry's validator, not just the parser.
         assert authoring.validation.validate_quiz(result) == ()
+
+    def test_the_model_cannot_put_topics_on_the_queue(self):
+        """CONTEXT: Queued topics - questions *the learner* raised.
+
+        `quiz_payload` carries a `queued_topics` the model invented. It is
+        dropped: the queue belongs to the learner, and one seeded at authoring
+        would have every freshly authored quiz open with a "saved for later"
+        list of questions nobody asked.
+        """
+        result, _, _ = author(quiz_payload())
+
+        assert result.queued_topics == ()
 
     def test_the_explanation_stays_a_flat_segment_array(self):
         result, _, _ = author(
@@ -248,7 +259,9 @@ class TestPersistence:
         assert attempt.learner_id == LEARNER
         assert attempt.session_id == result.quiz_session_id
         assert attempt.topic == result.topic
-        assert attempt.queued_topics == ("the third law",)
+        # A fresh session's queue is empty: it holds the questions *the
+        # learner* raised (CONTEXT: Queued topics), and they have raised none.
+        assert attempt.queued_topics == ()
 
     def test_the_attempt_is_keyed_by_its_own_ulid_not_the_session_id(self):
         result, _, attempts = author(quiz_payload())
@@ -310,7 +323,6 @@ class TestTheDirectAnswerBranch:
         assert isinstance(result, DirectAnswer)
         assert result.answer.startswith("Call emergency services")
         assert result.topic == "chest pain"
-        assert result.queued_topics == ("how the heart's conduction system works",)
 
     def test_a_direct_answer_persists_no_attempt(self):
         _, _, attempts = author(DIRECT_ANSWER_PAYLOAD)
@@ -322,14 +334,15 @@ class TestTheDirectAnswerBranch:
 
         assert client.call_count() == 1
 
-    def test_a_direct_answer_needs_no_queued_topics(self):
-        result, _, _ = author(
-            {
-                "type": "direct_answer",
-                "topic": "an outage",
-                "answer": "Roll back the deploy.",
-            }
-        )
+    def test_the_model_cannot_put_topics_on_the_queue(self):
+        """CONTEXT: Queued topics - questions *the learner* raised.
+
+        `DIRECT_ANSWER_PAYLOAD` carries a `queued_topics` the model invented.
+        The queue is the learner's, so it is not a field the model gets to
+        fill: authoring drops it, and the learner is never shown a question
+        they did not ask as one saved for later.
+        """
+        result, _, _ = author(DIRECT_ANSWER_PAYLOAD)
 
         assert result.queued_topics == ()
 

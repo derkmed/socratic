@@ -397,19 +397,6 @@ def _optional(payload: Mapping[str, Any], key: str, kind: type, where: str):
     return value
 
 
-def _strings(payload: Mapping[str, Any], key: str, where: str) -> tuple[str, ...]:
-    """A list of strings, absent meaning empty."""
-    values = _optional(payload, key, list, where)
-    if values is None:
-        return ()
-    for value in values:
-        if not isinstance(value, str):
-            raise AuthoringParseError(
-                f"{where}: {key!r} holds a {type(value).__name__}, not a string"
-            )
-    return tuple(values)
-
-
 def _parse_direct_answer(payload: Mapping[str, Any]) -> DirectAnswer:
     """The override branch, parsed on its own shape.
 
@@ -421,7 +408,6 @@ def _parse_direct_answer(payload: Mapping[str, Any]) -> DirectAnswer:
     return DirectAnswer(
         answer=_require(payload, "answer", str, where),
         topic=_require(payload, "topic", str, where),
-        queued_topics=_strings(payload, "queued_topics", where),
     )
 
 
@@ -459,7 +445,6 @@ def _parse_quiz(
             explanation=explanation,
             blanks=blanks,
             recap=_optional(payload, "recap", str, where) or "",
-            queued_topics=_strings(payload, "queued_topics", where),
         )
     except ValueError as error:
         raise AuthoringParseError(f"{where} is malformed: {error}") from None

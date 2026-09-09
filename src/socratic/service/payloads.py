@@ -189,6 +189,11 @@ def queued_body(queued: inquiry_module.Queued) -> dict[str, Any]:
 
     Nothing model-authored crosses here unrendered: `topic` is plain text, as
     it is on `quiz_body`, and the queued topics are the learner's own words.
+
+    `queued.others` rather than `attempt.queued_topics`: this inquiry is on
+    that queue - `raise_inquiry` put it there - and `inquiry` above already
+    names it, so sending the queue whole would render the question twice, once
+    as the subject and once as a sibling of itself.
     """
     attempt = queued.attempt
     return {
@@ -196,7 +201,7 @@ def queued_body(queued: inquiry_module.Queued) -> dict[str, Any]:
         "inquiry": queued.inquiry,
         "quiz_session_id": attempt.session_id,
         "topic": attempt.topic,
-        "queued_topics": list(attempt.queued_topics),
+        "queued_topics": list(queued.others),
     }
 
 

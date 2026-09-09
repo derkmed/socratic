@@ -1597,6 +1597,7 @@ class TestAnUnregisteredMode:
 
 
 SECOND_INQUIRY = "What is enthalpy?"
+THIRD_INQUIRY = "What is absolute zero?"
 
 
 def two_quizzes(harness_kwargs=None) -> Harness:
@@ -1634,17 +1635,20 @@ class TestASecondInquiryMidQuiz:
             first["quiz_session_id"]
         ]
 
-    def test_the_queued_body_names_the_open_quiz_and_the_growing_queue(self):
+    def test_the_queued_body_names_the_open_quiz_and_the_rest_of_the_queue(self):
         harness = two_quizzes()
         first = harness.author()
+        harness.author(inquiry=SECOND_INQUIRY)
 
-        second = harness.author(inquiry=SECOND_INQUIRY)
+        third = harness.author(inquiry=THIRD_INQUIRY)
 
-        assert second["quiz_session_id"] == first["quiz_session_id"]
-        assert second["topic"] == first["topic"]
-        assert second["inquiry"] == SECOND_INQUIRY
-        assert SECOND_INQUIRY in second["queued_topics"]
-        assert "the third law" in second["queued_topics"]
+        assert third["quiz_session_id"] == first["quiz_session_id"]
+        assert third["topic"] == first["topic"]
+        assert third["inquiry"] == THIRD_INQUIRY
+        # The rest of the queue - and not this question, which `inquiry`
+        # already names. Listing it under "also asked" would render it as a
+        # sibling of itself.
+        assert third["queued_topics"] == [SECOND_INQUIRY]
 
     def test_the_queued_body_mints_no_capability_token(self):
         """`TokenMinter.mint` retires the session's previous token, so a token
@@ -1779,6 +1783,7 @@ class TestDisplacement:
         harness = two_quizzes()
         first = harness.author()
         harness.author(inquiry=SECOND_INQUIRY)
+        harness.author(inquiry=THIRD_INQUIRY)
 
         body = self._displace(
             harness, first["capability_token"], first["quiz_session_id"]
@@ -1786,7 +1791,7 @@ class TestDisplacement:
 
         attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
         assert SECOND_INQUIRY not in attempt.queued_topics
-        assert "the third law" in attempt.queued_topics
+        assert THIRD_INQUIRY in attempt.queued_topics
 
     def test_the_service_token_does_not_authorize_a_displacement(self):
         harness = two_quizzes()

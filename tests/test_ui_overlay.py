@@ -398,7 +398,7 @@ class TestTheQueuedBranch:
             "inquiry": "What is enthalpy?",
             "quiz_session_id": "01J000000000000000000000AA",
             "topic": "the second law of thermodynamics",
-            "queued_topics": ["the third law", "What is enthalpy?"],
+            "queued_topics": ["the third law"],
         }
         body.update(overrides)
         return overlay.render_queued(body)
@@ -410,6 +410,17 @@ class TestTheQueuedBranch:
         assert "What is enthalpy?" in document
         assert "the third law" in document
         assert '<meta charset="utf-8">' in document
+
+    def test_the_question_just_saved_is_named_once(self):
+        """It is the subject of this document, not a sibling of itself.
+
+        A bare `in` check passes just as happily on a document that renders
+        the inquiry twice, which is how the doubled render shipped: the
+        assertion has to count.
+        """
+        document = self._queued(queued_topics=["the third law"])
+
+        assert document.count("What is enthalpy?") == 1
 
     def test_it_carries_no_client_and_nothing_to_submit(self):
         """No token was minted for it, so there is nothing for a script to
