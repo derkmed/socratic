@@ -27,6 +27,7 @@ from socratic.adapters import anthropic_client  # noqa: E402
 from socratic.domain import model_client  # noqa: E402
 from socratic.domain import modes  # noqa: E402
 from socratic.domain import prompting  # noqa: E402
+from tests.test_output_schemas import object_nodes  # noqa: E402
 
 CallType = prompting.CallType
 
@@ -228,20 +229,29 @@ class TestCacheControl:
 
 class TestStructuredOutput:
     def test_every_call_type_constrains_its_output_to_a_json_schema(self):
+        # An object or a union of them: ADR-0004 puts a union at the top level
+        # of the authoring response, so "the top node is an object" was never
+        # the rule. What every call must have is a schema at all — a request
+        # with no `output_config.format` is an unconstrained request.
         for call_type in CallType:
             fmt = build(call_type)["output_config"]["format"]
             assert fmt["type"] == "json_schema"
-            assert fmt["schema"]["type"] == "object"
+            assert list(object_nodes(fmt["schema"])), call_type
 
     def test_every_schema_is_strict(self):
         # The SDK spells "strict" structurally on `output_config.format`:
         # `additionalProperties: false` plus a complete `required` list. See the
         # PR's note on where ADR-0014's `strict: true` wording lands.
+        #
+        # Asserted at *every* object node rather than only the top one, which
+        # is what the API asks for and what the top-only version silently
+        # stopped covering once the schemas grew nested objects.
         for call_type, schema in anthropic_client.DEFAULT_OUTPUT_SCHEMAS.items():
-            assert schema["additionalProperties"] is False, call_type
-            assert sorted(schema["required"]) == sorted(schema["properties"]), (
-                call_type
-            )
+            for node in object_nodes(schema):
+                assert node["additionalProperties"] is False, call_type
+                assert sorted(node["required"]) == sorted(node["properties"]), (
+                    call_type
+                )
 
     def test_the_five_call_types_have_five_different_schemas(self):
         rendered = {
@@ -252,8 +262,9 @@ class TestStructuredOutput:
         assert len(set(rendered.values())) == len(CallType)
 
     def test_the_schema_can_be_overridden_per_call_type(self):
-        # The authoring and grading tickets own the real shapes; the adapter
-        # ships provisional ones and gets out of the way.
+        # The injection point stays. What it overrides is now a composed
+        # default rather than a placeholder — a caller that knows its mode
+        # passes `output_schemas.for_mode(mode)` through here (#66).
         mine = {
             "type": "object",
             "properties": {"verdict": {"type": "string"}},
