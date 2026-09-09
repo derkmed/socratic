@@ -10,7 +10,8 @@ Layout, in render order (ADR-0006, master spec section 4)::
 
     [ segment 1 ] invariant tutor instructions for this call type  <- cache_control
     [ segment 2 ] learner profile + quiz + blank rubrics           <- cache_control
-    [ tail      ] guesses so far in order, current blank + guess
+    [ tail      ] the learner's inquiry, guesses so far in order,
+                  current blank + guess
 
 **There are five segment 1s, not one.** Each call type has its own instructions,
 its own output schema, and therefore its own cache prefix, and each must clear
@@ -72,7 +73,11 @@ class SegmentRole(str, Enum):
     """Learner profile, quiz, blank rubrics. Per learner, per session."""
 
     VOLATILE_TAIL = "volatile_tail"
-    """Guesses so far, current blank and guess. Never cached."""
+    """The learner's inquiry, guesses so far, current blank and guess.
+
+    Never cached — and the only place a per-request string such as the inquiry
+    may appear.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +184,7 @@ def assemble(
     profile: LearnerProfile,
     probe_cadence: ProbeCadence,
     quiz: Quiz | None = None,
+    inquiry: str | None = None,
     guesses: Sequence[str] = (),
     current_blank_id: str | None = None,
     current_guess: str | None = None,
@@ -195,6 +201,11 @@ def assemble(
         (ADR-0010), and taking the parameter is what makes that assertable.
       quiz: The quiz in hand, when there is one. `author_skeleton` and
         `fold_narrative` have none.
+      inquiry: What the learner actually asked, for the calls that carry it —
+        `author_skeleton` above all. Rendered at the head of the volatile
+        tail, which is the only position open to it: it is the most
+        learner-specific string in the system, so anywhere above the last
+        breakpoint would give every learner their own cache prefix (ADR-0006).
       guesses: The guesses so far, in order, already rendered to one line each
         by the caller that owns the `Guess` record.
       current_blank_id: The blank being answered, when there is one.
@@ -226,6 +237,7 @@ def assemble(
             PromptSegment(
                 role=SegmentRole.VOLATILE_TAIL,
                 text=_render_tail(
+                    inquiry=inquiry,
                     guesses=guesses,
                     current_blank_id=current_blank_id,
                     current_guess=current_guess,
@@ -301,17 +313,28 @@ def _render_explanation(explanation: tuple[object, ...]) -> str:
 
 def _render_tail(
     *,
+    inquiry: str | None,
     guesses: Sequence[str],
     current_blank_id: str | None,
     current_guess: str | None,
 ) -> str:
-    """The volatile tail: guesses so far in order, then the current pair.
+    """The volatile tail: the inquiry, the guesses in order, the current pair.
 
     Sits after the last breakpoint and is never marked cacheable — it changes
     on every single request, so caching it would write a fresh entry each time
-    and read none of them.
+    and read none of them. That is exactly why the inquiry belongs here: a
+    per-request string above a breakpoint splits the segment it lands in.
+
+    A call with no inquiry renders no inquiry heading. Omission is safe here
+    and only here — the tail is not cached, so there is no entry for a missing
+    section to split (contrast ADR-0010, which is about segment 1).
     """
-    lines = ["## Guesses so far, in order"]
+    lines: list[str] = []
+    if inquiry is not None:
+        lines.append("## The learner's inquiry")
+        lines.append(f"  {inquiry}")
+
+    lines.append("## Guesses so far, in order")
     if guesses:
         for position, guess in enumerate(guesses, start=1):
             lines.append(f"  {position}. {guess}")
