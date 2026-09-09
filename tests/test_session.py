@@ -415,6 +415,33 @@ class TestGuessesPersistInTheOrderMade:
 # --- Acceptance: the unified seal predicate ----------------------------------
 
 
+class TestADisplacedAttemptTakesNoMoreAnswers:
+    """#15: displacement closes the attempt, so the submit path refuses it.
+
+    The learner said "start this instead"; a guess arriving from the tab they
+    left behind is not a verdict to grade, it is a write to a closed record.
+    """
+
+    def test_a_submission_against_an_abandoned_attempt_is_refused(self):
+        attempt = attempt_for(novice_quiz())
+        quiz_session, attempts = wire(attempt)
+        attempts.save(attempt.abandoned())
+
+        with pytest.raises(ValueError, match="abandoned"):
+            submit(quiz_session, attempt, "b1", "b1-o1")
+
+    def test_the_abandoned_record_is_left_exactly_as_it_was(self):
+        attempt = attempt_for(novice_quiz())
+        quiz_session, attempts = wire(attempt)
+        abandoned = attempt.abandoned()
+        attempts.save(abandoned)
+
+        with pytest.raises(ValueError):
+            submit(quiz_session, attempt, "b1", "b1-o1")
+
+        assert attempts.get(LEARNER, attempt.attempt_id) == abandoned
+
+
 class TestSealingGoesThroughTheUnifiedPredicate:
     def test_the_attempt_seals_when_every_blank_is_resolved(self):
         attempt = attempt_for(novice_quiz(("b1", "b2")))

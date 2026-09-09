@@ -117,16 +117,28 @@ whether it was graded deterministically or by the model.
 **Outcome** — `in_flight` | `resolved` | `abandoned`. `in_flight` is the stored
 truth for an unfinished quiz; `abandoned` is written only on displacement, when the
 learner explicitly starts something else. **We never guess that a learner left** —
-a closed tab tells us nothing, so readers apply their own age threshold.
+a closed tab tells us nothing, so readers apply their own age threshold. An
+abandoned attempt keeps its guesses and probes and leaves **`sealed_at` null**:
+that stamp means completed, and a displaced quiz was left rather than finished.
 
 **RatingRecord** — an optional 1–5 Likert score keyed by attempt id. A human signal
 about quiz quality, outside the LLM conversation entirely. Separate record, so the
 attempt stays sealed.
 
-**Sealed** — an attempt that will never be written again. One predicate: **all
+**Sealed** — a completed attempt, stamped with `sealed_at`. One predicate: **all
 blanks resolved and no probe pending**. Because a failed probe can re-open a blank
 in Advanced, `resolved` is not a terminal state and completion can fire and un-fire;
 the same predicate covers probes-off and dismissed probes without a branch.
+
+**Closed** — an attempt that will never be written again: sealed *or* abandoned.
+Sealing is the completion half of it and displacement the other, and only the
+first stamps a time — so it is `is_closed`, not `sealed_at`, that the record's
+write guard, the repository and the profile job's watermark all read.
+
+**Start this instead** — the explicit escape from the single-topic-focus rule.
+It abandons the attempt the learner has open, authors the new inquiry, and
+carries the remaining queue forward onto the attempt that replaces it. Asking a
+second question without it queues the question and leaves the quiz alone.
 
 ## The prompt
 

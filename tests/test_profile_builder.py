@@ -133,7 +133,7 @@ def _attempt(
     if not sealed:
         return attempt
     if outcome is Outcome.ABANDONED:
-        return attempt.abandoned(LATER)
+        return attempt.abandoned()
     return attempt.sealed(LATER)
 
 
@@ -216,6 +216,18 @@ class TestSealedPrefix:
         later = _attempt()
         ordered = tuple(sorted((first, in_flight, later), key=lambda a: a.attempt_id))
         assert profile_builder.sealed_prefix(ordered) == (first,)
+
+    def test_an_abandoned_attempt_is_folded_in_rather_than_barring_the_run(self):
+        # #15: an abandoned attempt carries no `sealed_at`, and it will never
+        # get one - it was left, not finished. Reading the barrier as "not
+        # sealed" would park the watermark behind it for good.
+        first = _attempt()
+        abandoned = _attempt(outcome=Outcome.ABANDONED)
+        later = _attempt()
+        ordered = tuple(
+            sorted((first, abandoned, later), key=lambda a: a.attempt_id)
+        )
+        assert profile_builder.sealed_prefix(ordered) == ordered
 
     def test_it_sorts_by_ulid_rather_than_trusting_the_caller(self):
         one, two = _attempt(), _attempt()

@@ -247,7 +247,7 @@ class QuizAuthoring:
 
         Returns:
           The attempt with the payload merged in - or unchanged, if it had
-          already sealed.
+          already closed - sealed, or abandoned by displacement.
 
         Raises:
           KeyError: If the learner has no attempt for this quiz's session.
@@ -265,10 +265,13 @@ class QuizAuthoring:
         response = self._model_client.author_pedagogy(segments)
 
         attempt = self._attempt_for(quiz, learner_id)
-        if attempt.is_sealed:
-            # Sealed means never written again (CONTEXT: Sealed), and pedagogy
-            # for blanks that are all resolved has no reader. Dropping it is
-            # the whole handling: a late payload is not an error.
+        if attempt.is_closed:
+            # Closed means never written again, and pedagogy the learner will
+            # not see has no reader. Dropping it is the whole handling: a late
+            # payload is not an error. Both closed states land here - sealed,
+            # where every blank is already resolved (CONTEXT: Sealed), and
+            # abandoned, where the learner displaced the quiz inside the
+            # window (#15).
             return attempt
 
         merged = _merge_pedagogy(attempt.quiz, _decode(response.content))

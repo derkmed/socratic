@@ -184,6 +184,16 @@ class TestAttemptRepository:
         repository.save(attempt.with_guess(_guess()))
         assert len(repository.get("learner-1", attempt.attempt_id).guesses) == 1
 
+    def test_an_abandoned_attempt_is_never_written_again(self):
+        # #15: displacement closes the record as surely as sealing does, and
+        # since an abandoned attempt carries no `sealed_at` the store has to
+        # read the outcome to see it.
+        repository = InMemoryAttemptRepository()
+        abandoned = _attempt().abandoned()
+        repository.save(abandoned)
+        with pytest.raises(ValueError, match="abandoned"):
+            repository.save(abandoned)
+
     def test_a_sealed_attempt_is_never_written_again(self):
         # Acceptance 24's other half: the attempt document is unchanged after
         # sealing, enforced by the store rather than trusted to callers.
@@ -264,7 +274,7 @@ class TestLookupBySession:
         # `outcome` filter needed.
         repository = InMemoryAttemptRepository()
         session_id = str(Ulid.mint())
-        displaced = _attempt(session_id=session_id).abandoned(LATER)
+        displaced = _attempt(session_id=session_id).abandoned()
         restarted = _attempt(session_id=session_id)
         assert displaced.attempt_id < restarted.attempt_id
         repository.save(displaced)
@@ -277,7 +287,7 @@ class TestLookupBySession:
     def test_the_order_the_two_are_written_in_does_not_decide(self):
         repository = InMemoryAttemptRepository()
         session_id = str(Ulid.mint())
-        displaced = _attempt(session_id=session_id).abandoned(LATER)
+        displaced = _attempt(session_id=session_id).abandoned()
         restarted = _attempt(session_id=session_id)
         repository.save(restarted)
         repository.save(displaced)

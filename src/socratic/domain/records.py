@@ -31,6 +31,7 @@ lives in `socratic.domain.profiles` - a leaf neither this module nor
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -203,8 +204,9 @@ class QuizAttempt:
     it wants a timeline.
 
     **Write through the `with_*` methods, never `dataclasses.replace`.** Each
-    one refuses a sealed attempt (CONTEXT: Sealed); `dataclasses.replace` goes
-    straight to `__init__` and so goes round that guard without complaining.
+    one refuses a closed attempt - sealed or abandoned (CONTEXT: Closed);
+    `dataclasses.replace` goes straight to `__init__` and so goes round that
+    guard without complaining.
     The guard cannot be moved into `__post_init__`, because reconstructing a
     sealed attempt field-for-field is exactly what a repository does when it
     materialises a stored document, and `__post_init__` sees only the value it
@@ -266,10 +268,14 @@ class QuizAttempt:
             [probe.blank_id for probe in self.probes], MAX_PROBES_PER_BLANK, "probes"
         )
 
-        if self.outcome is Outcome.IN_FLIGHT and self.sealed_at is not None:
-            raise ValueError("an in-flight attempt has no sealed_at")
-        if self.outcome is not Outcome.IN_FLIGHT and self.sealed_at is None:
-            raise ValueError(f"a {self.outcome.value} attempt needs a sealed_at")
+        # `sealed_at` is the completion stamp, so it pairs with `resolved`
+        # alone (#15). An abandoned attempt was left, not finished: it is
+        # closed against further writes, but it carries no sealed_at, and an
+        # in-flight one never did.
+        if self.outcome is Outcome.RESOLVED and self.sealed_at is None:
+            raise ValueError("a resolved attempt needs a sealed_at")
+        if self.outcome is not Outcome.RESOLVED and self.sealed_at is not None:
+            raise ValueError(f"a {self.outcome.value} attempt has no sealed_at")
 
     @staticmethod
     def _check_per_blank_bound(
@@ -285,15 +291,26 @@ class QuizAttempt:
 
     @property
     def is_sealed(self) -> bool:
-        """An attempt that will never be written again (CONTEXT: Sealed)."""
+        """A completed attempt, stamped on sealing (CONTEXT: Sealed)."""
         return self.sealed_at is not None
 
+    @property
+    def is_closed(self) -> bool:
+        """An attempt that will never be written again.
+
+        Sealed *or* abandoned. Sealing is one of two ways an attempt stops
+        being written to, and since #15 it is the only one that stamps a time:
+        a displaced attempt is closed with `sealed_at` still null, because
+        nothing about it was completed.
+        """
+        return self.is_sealed or self.outcome is Outcome.ABANDONED
+
     def with_guess(self, guess: Guess) -> "QuizAttempt":
-        self._refuse_if_sealed("record a guess against")
+        self._refuse_if_closed("record a guess against")
         return dataclasses.replace(self, guesses=(*self.guesses, guess))
 
     def with_probe(self, probe: Probe) -> "QuizAttempt":
-        self._refuse_if_sealed("record a probe against")
+        self._refuse_if_closed("record a probe against")
         return dataclasses.replace(self, probes=(*self.probes, probe))
 
     def with_probe_resolved(self, position: int, probe: Probe) -> "QuizAttempt":
@@ -312,16 +329,32 @@ class QuizAttempt:
 
         Raises:
           IndexError: If there is no probe at `position`.
-          ValueError: If the attempt is sealed.
+          ValueError: If the attempt is closed.
         """
-        self._refuse_if_sealed("resolve a probe against")
+        self._refuse_if_closed("resolve a probe against")
         probes = list(self.probes)
         probes[position] = probe
         return dataclasses.replace(self, probes=tuple(probes))
 
     def with_model_call(self, call: ModelCallRecord) -> "QuizAttempt":
-        self._refuse_if_sealed("record a model call against")
+        self._refuse_if_closed("record a model call against")
         return dataclasses.replace(self, model_calls=(*self.model_calls, call))
+
+    def with_queued_topics(self, topics: Sequence[str]) -> "QuizAttempt":
+        """Replace the queue of questions the learner raised but parked.
+
+        The whole queue, not one topic: displacement rewrites it wholesale when
+        it carries the remainder forward onto the restart (#15), and appending
+        one inquiry is the same write with one more element. Which topics, in
+        what order, and whether a repeat counts twice are the caller's
+        business - `socratic.domain.inquiry` holds that - so the record keeps
+        only the guard and the immutability.
+
+        Raises:
+          ValueError: If the attempt is closed.
+        """
+        self._refuse_if_closed("queue a topic on")
+        return dataclasses.replace(self, queued_topics=tuple(topics))
 
     def with_quiz(self, quiz: Quiz) -> "QuizAttempt":
         """Swap in a quiz the authoring path has merged into (D11, ADR-0011).
@@ -331,7 +364,7 @@ class QuizAttempt:
         the three above. The record's invariants run again on the swap, so a
         merge that dropped a blank a guess names is rejected here.
         """
-        self._refuse_if_sealed("replace the quiz on")
+        self._refuse_if_closed("replace the quiz on")
         return dataclasses.replace(self, quiz=quiz)
 
     def sealed(self, at: datetime) -> "QuizAttempt":
@@ -340,24 +373,31 @@ class QuizAttempt:
         The predicate that decides *when* this is called - all blanks resolved
         and no probe pending - belongs to the session, not the record.
         """
-        self._refuse_if_sealed("seal")
+        self._refuse_if_closed("seal")
         return dataclasses.replace(self, sealed_at=at, outcome=Outcome.RESOLVED)
 
-    def abandoned(self, at: datetime) -> "QuizAttempt":
+    def abandoned(self) -> "QuizAttempt":
         """Close the attempt as displaced by "start this instead".
 
-        Written only on displacement. The attempt is closed - it will never be
-        written again - so it carries a `sealed_at` like any other closed
-        record; `outcome` is what distinguishes it from a resolved one.
-        """
-        self._refuse_if_sealed("abandon")
-        return dataclasses.replace(self, sealed_at=at, outcome=Outcome.ABANDONED)
+        Written only on displacement - never by a sweeper, a timeout, or any
+        other inference that the learner left (CONTEXT: Outcome). Takes no
+        time because it stamps none: `sealed_at` stays null on an abandoned
+        attempt (#15), and when the displacement happened is legible from the
+        `created_at` of the attempt that displaced it.
 
-    def _refuse_if_sealed(self, action: str) -> None:
+        The attempt is closed all the same - `outcome` is what says so, and
+        `is_closed` is what the guard reads.
+        """
+        self._refuse_if_closed("abandon")
+        return dataclasses.replace(self, outcome=Outcome.ABANDONED)
+
+    def _refuse_if_closed(self, action: str) -> None:
         if self.is_sealed:
             raise ValueError(
                 f"cannot {action} an attempt sealed at {self.sealed_at}"
             )
+        if self.outcome is Outcome.ABANDONED:
+            raise ValueError(f"cannot {action} an abandoned attempt")
 
 
 @dataclass(frozen=True, slots=True)
