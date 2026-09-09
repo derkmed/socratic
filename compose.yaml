@@ -34,10 +34,14 @@ services:
     depends_on:
       - quiz-service
     environment:
-      # The Pipe reaches the service by its compose DNS name; the iframe
-      # reaches it from the browser, which is why the two differ.
+      # The Pipe reaches the service by its compose DNS name, from inside this
+      # network. The learner's browser reaches it by a different name — and that
+      # one is not set here and cannot be: it is the service's own
+      # `SOCRATIC_PUBLIC_URL` above, held by the container that renders the
+      # overlay because that is where it is rendered, never accepted from a
+      # caller (#13, D15). Publishing on another host port means changing that
+      # variable and the port mapping above; nothing on this container.
       SOCRATIC_SERVICE_URL: http://quiz-service:8080
-      SOCRATIC_SERVICE_URL_FOR_BROWSER: http://localhost:8080
       SOCRATIC_SERVICE_TOKEN: ${SOCRATIC_SERVICE_TOKEN:?set the Pipe's service token}
     ports:
       - "3000:8080"

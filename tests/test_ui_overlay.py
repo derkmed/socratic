@@ -338,3 +338,57 @@ class TestTheDirectAnswerBranch:
         assert '<meta charset="utf-8">' in document
         assert '<section class="socratic-control"' not in document
         assert "SocraticQuiz" not in document
+
+
+class TestTheQueuedBranch:
+    """The third document (#92).
+
+    The Pipe returns `/overlays`' bytes verbatim, so a queued inquiry has to
+    become a document here or it becomes a `KeyError` there.
+    """
+
+    def _queued(self, **overrides) -> str:
+        body = {
+            "kind": "queued",
+            "inquiry": "What is enthalpy?",
+            "quiz_session_id": "01J000000000000000000000AA",
+            "topic": "the second law of thermodynamics",
+            "queued_topics": ["the third law", "What is enthalpy?"],
+        }
+        body.update(overrides)
+        return overlay.render_queued(body)
+
+    def test_it_names_the_quiz_still_open_and_the_question_just_saved(self):
+        document = self._queued()
+
+        assert "the second law of thermodynamics" in document
+        assert "What is enthalpy?" in document
+        assert "the third law" in document
+        assert '<meta charset="utf-8">' in document
+
+    def test_it_carries_no_client_and_nothing_to_submit(self):
+        """No token was minted for it, so there is nothing for a script to
+        authorize with and no control that could spend one."""
+        document = self._queued()
+
+        assert "SocraticQuiz" not in document
+        assert "<script" not in document
+        assert '<section class="socratic-control"' not in document
+        assert "data-capability-token" not in document
+        assert "data-service-base-url" not in document
+
+    def test_the_session_id_is_not_written_into_the_document(self):
+        """It is an identifier the *caller* was given, not something the
+        learner's page needs: there is no request this document can make."""
+        document = self._queued()
+
+        assert "01J000000000000000000000AA" not in document
+
+    def test_the_learners_own_words_are_escaped(self):
+        document = self._queued(
+            inquiry="<script>alert(1)</script>",
+            queued_topics=["<script>alert(1)</script>"],
+        )
+
+        assert "<script>alert(1)</script>" not in document
+        assert "&lt;script&gt;" in document

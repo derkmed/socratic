@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from socratic.domain import inquiry as inquiry_module
 from socratic.domain import session as session_module
 from socratic.domain import types
 from socratic.domain.registry import ModeRegistry, mode_name
@@ -67,6 +68,18 @@ class _SessionScoped(_Strict):
     """
 
     quiz_session_id: str = Field(min_length=1)
+
+
+class DisplaceRequest(_SessionScoped):
+    """"Start this instead" (#92, master acceptance 26).
+
+    No `learner_id` and no `mode`. The learner comes from the capability
+    token's own claims, and the mode from the settings the Pipe pushed - the
+    iframe cannot see `UserValves`, and a mode it could name would be a mode a
+    learner could choose for someone else's next quiz.
+    """
+
+    inquiry: str = Field(min_length=1)
 
 
 class AnswerRequest(_SessionScoped):
@@ -162,6 +175,41 @@ def direct_answer_body(answer: types.DirectAnswer) -> dict[str, Any]:
         "answer_html": html_of(answer.answer),
         "queued_topics": list(answer.queued_topics),
     }
+
+
+def queued_body(queued: inquiry_module.Queued) -> dict[str, Any]:
+    """The third authoring branch: the inquiry was parked (#92, #15).
+
+    **No `capability_token`, and that is forced rather than tidy.**
+    `TokenMinter.mint` retires whichever token preceded it for a session, so
+    minting one for the attempt the learner already has open would invalidate
+    the token their live overlay is holding and 401 their next answer. The
+    session id travels as what it has always been — an identifier, not a
+    credential (D7, ADR-0007) — so the caller can say which quiz is in the way.
+
+    Nothing model-authored crosses here unrendered: `topic` is plain text, as
+    it is on `quiz_body`, and the queued topics are the learner's own words.
+    """
+    attempt = queued.attempt
+    return {
+        "kind": "queued",
+        "inquiry": queued.inquiry,
+        "quiz_session_id": attempt.session_id,
+        "topic": attempt.topic,
+        "queued_topics": list(attempt.queued_topics),
+    }
+
+
+def displaced_body(
+    body: dict[str, Any], *, displaced_session_id: Optional[str]
+) -> dict[str, Any]:
+    """An authored body, plus what starting it displaced.
+
+    Null when nothing was: a `DirectAnswer` starts no attempt, so there is
+    nothing for the displaced attempt's queue to carry forward onto and the
+    domain leaves the open quiz alone.
+    """
+    return {**body, "displaced_session_id": displaced_session_id}
 
 
 def _probe_body(probe) -> Optional[dict[str, Any]]:
