@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Union
 
-from socratic.domain.ids import QuizSessionId
+from socratic.domain.ids import QuizSessionId, Ulid
 from socratic.domain.modes import DifficultyMode
 
 
@@ -111,6 +111,19 @@ class Quiz:
     queued_topics: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        # The key before the contents, as `QuizAttempt.__post_init__` parses
+        # `attempt_id` before validating what the attempt holds. ADR-0007 makes
+        # the session id a ULID we mint, and `tokens.py` reasons from its
+        # timestamp prefix to explain why it is not a credential - a claim
+        # about a ULID, not about an arbitrary string.
+        try:
+            Ulid.parse(self.quiz_session_id)
+        except ValueError as error:
+            raise ValueError(
+                f"a quiz session is keyed by a ULID: "
+                f"{self.quiz_session_id!r} ({error})"
+            ) from None
+
         ids = [blank.blank_id for blank in self.blanks]
         duplicates = {id_ for id_ in ids if ids.count(id_) > 1}
         if duplicates:
