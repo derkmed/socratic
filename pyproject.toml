@@ -38,6 +38,15 @@ dev = [
     "tomli>=2; python_version < '3.11'",
     "httpx>=0.27",      # FastAPI's TestClient transport; no socket is opened
 ]
+# The install that leaves nothing gated. Nine test modules open with
+# `pytest.importorskip`, one call for the whole file, so an absent extra costs
+# a module rather than a test and the run stays green — 316 tests apart, on the
+# same commit (#90). `dev` deliberately stays the test runner alone: a
+# contributor working below the seam has no use for the Anthropic SDK, and the
+# banner `tests/gating.py` prints names this line when anything was gated out.
+# CI installs it and passes `--require-extras`, so a failed install cannot
+# masquerade as a pass.
+all = ["socratic[anthropic,dev,rendering,service]"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/socratic"]

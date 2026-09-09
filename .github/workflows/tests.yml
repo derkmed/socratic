@@ -1,0 +1,58 @@
+# The suite, on every push and every pull request, in both conditions (#81).
+#
+# Two jobs rather than a matrix, because they share no install step: the point
+# of `bare` is the absence of everything `installed` puts there.
+#
+#   bare       an interpreter with the test runner and nothing else. No
+#              editable install, no extra. This is the condition #79 was
+#              invisible in — a guard that fails wherever `socratic` is not
+#              importable, green on every developer's machine because every
+#              developer had `pip install -e .`. It is also what keeps
+#              `dependencies == []` and the stdlib-only domain (ADR-0002)
+#              honest. Nine modules skip here, on purpose, and the run says so.
+#
+#   installed  `.[all]` — the package and every extra — with
+#              `--require-extras`, so an extra that failed to install fails the
+#              job instead of quietly taking its module out of the run (#90).
+#
+# Python 3.10 in both: `requires-python = ">=3.10"` and the Dockerfile runs
+# `python:3.10-slim`, so it is both the floor and what the prototype ships on.
+# A wider matrix is a decision about supported platforms that no document in
+# this repository has made.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  bare:
+    name: "bare: no install, no extras"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # Named directly rather than through an extra, because an extra of this
+      # project installs this project — which is the one thing this job must
+      # not have. `tomli` is the 3.11 backport `test_import_hygiene` needs.
+      - name: Install the test runner, and nothing else
+        run: pip install "pytest>=8" "tomli>=2"
+      - name: Run the suite
+        run: python -m pytest
+
+  installed:
+    name: "installed: the package and every extra"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install the package and every extra
+        run: pip install -e ".[all]"
+      - name: Run the suite, and refuse a silently gated module
+        run: python -m pytest --require-extras

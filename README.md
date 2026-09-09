@@ -103,7 +103,7 @@ one can deliver. See [ADR-0015](docs/adr/0015-iframe-pipe-transport.md).
 ## Tests
 
 ```sh
-pip install -e ".[service,rendering,dev]"
+pip install -e ".[all]"
 pytest
 ```
 
@@ -111,6 +111,19 @@ The domain package has **no base dependencies** and is testable with no
 third-party package installed at all; the Anthropic SDK, the renderer and the
 service are optional extras, and the tests for each skip without theirs. No
 test opens a socket or calls the model.
+
+`all` is the install that leaves nothing gated. Each extra's tests are gated
+by a single `pytest.importorskip` for the whole module, so a missing extra
+costs a *module*, not a test, and the run stays green — 316 tests apart, on the
+same commit. Any run that had a module gated out ends with a summary naming it,
+the extra it wanted and how big it was; `pytest --require-extras` turns that
+summary into a failure, which is what CI's installed job uses.
+
+Both conditions run in CI on every push and pull request
+([`.github/workflows/tests.yml`](.github/workflows/tests.yml)): `bare` is an
+interpreter with `pytest` alone — no editable install, no extra — because that
+is the condition the import-hygiene guards are about and the one nobody
+develops in.
 
 What the suite cannot cover is the outermost ring — this Pipe, inside a real
 Open WebUI, reaching a real service. That needs a container runtime and an API
