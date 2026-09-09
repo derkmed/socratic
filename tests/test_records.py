@@ -260,6 +260,28 @@ class TestQuizAttempt:
         with pytest.raises(ValueError, match="unknown blank"):
             _attempt().with_probe(_probe("b99"))
 
+    def test_with_quiz_swaps_the_quiz_and_leaves_the_previous_record_untouched(
+        self,
+    ):
+        # The pedagogy merge (#9) needs this write; before #46 it reached for
+        # `dataclasses.replace` and so went round `_refuse_if_sealed`.
+        attempt = _attempt()
+        merged = _quiz()
+        swapped = attempt.with_quiz(merged)
+        assert swapped.quiz is merged
+        assert attempt.quiz is not merged
+
+    def test_with_quiz_keeps_the_guesses_already_recorded(self):
+        attempt = _attempt().with_guess(_guess())
+        assert attempt.with_quiz(_quiz()).guesses == attempt.guesses
+
+    def test_with_quiz_rejects_a_quiz_that_drops_a_guessed_blank(self):
+        # The record's own invariants run again on the swap, so a merge that
+        # loses a blank cannot orphan the guesses that name it.
+        attempt = _attempt().with_guess(_guess("b2"))
+        with pytest.raises(ValueError, match="unknown blank"):
+            attempt.with_quiz(_quiz(1))
+
     def test_the_anthropic_message_ids_and_usage_are_kept_per_call(self):
         # D7 / ADR-0007: the message.id list is the audit link from a stored
         # quiz back to the exact API calls behind it.
@@ -304,6 +326,59 @@ class TestSealing:
             sealed.with_guess(_guess())
         with pytest.raises(ValueError, match="sealed"):
             sealed.with_probe(_probe())
+
+    def test_a_sealed_attempt_cannot_have_its_quiz_replaced(self):
+        # #46: the write the pedagogy merge needs, refused like every other.
+        sealed = _attempt().sealed(LATER)
+        with pytest.raises(ValueError, match="sealed"):
+            sealed.with_quiz(_quiz())
+
+    def test_every_with_method_on_the_record_refuses_a_sealed_attempt(self):
+        # The structural half of #46. A `with_*` sibling added later without
+        # `_refuse_if_sealed` fails here; one added without an entry in this
+        # table fails here too, so the guard cannot be forgotten quietly.
+        arguments = {
+            "with_guess": _guess(),
+            "with_probe": _probe(),
+            "with_model_call": ModelCallRecord(
+                call_type="author_pedagogy",
+                message_id="msg_01pedagogy",
+                usage=TokenUsage(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+            ),
+            "with_quiz": _quiz(),
+        }
+        mutators = {
+            name
+            for name in dir(QuizAttempt)
+            if name.startswith("with_") and callable(getattr(QuizAttempt, name))
+        }
+        assert mutators == set(arguments)
+
+        sealed = _attempt().sealed(LATER)
+        for name, argument in arguments.items():
+            with pytest.raises(ValueError, match="sealed"):
+                getattr(sealed, name)(argument)
+
+    def test_a_sealed_attempt_is_still_reconstructible_field_for_field(self):
+        # Deliberate, and the reason the `dataclasses.replace` route stays
+        # advisory rather than structural (#46): a repository materialising a
+        # stored document rebuilds a sealed attempt through `__init__`, and
+        # `__post_init__` cannot tell that apart from a caller rebuilding one
+        # with fresh content. Refusing sealed reconstruction would break
+        # persistence, `sealed()` and `abandoned()` alike.
+        sealed = _attempt().with_guess(_guess()).sealed(LATER)
+        rebuilt = QuizAttempt(
+            **{
+                field.name: getattr(sealed, field.name)
+                for field in dataclasses.fields(sealed)
+            }
+        )
+        assert rebuilt == sealed
 
     def test_displacement_marks_the_attempt_abandoned(self):
         # ADR-0005 / CONTEXT Outcome: `abandoned` is written only on
