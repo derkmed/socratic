@@ -901,10 +901,13 @@ class TestTheFiveCachePrefixesArePinned:
         CallType.AUTHOR_PEDAGOGY: (
             "9eb883fd09f0364a55f902f4bf69eca53246c28800bd2763ad287d07df0a411c"
         ),
-        # Rewritten once by #56 / ADR-0016, to ask for the hint ladder's rung
-        # text. That invalidation is the accepted cost of the decision.
+        # Rewritten twice. #56 / ADR-0016 asked for the hint ladder's rung
+        # text; #127 / ADR-0019 asks for `revealed_answer`, the phrase that
+        # goes in the gap when rung three closes the blank. Declaring the field
+        # in the schema alone would have left it forever null, so the prefix
+        # had to move — the accepted cost of the decision, both times.
         CallType.GRADE_ANSWER: (
-            "27b268225b85ee5dc353677b05b9a4a904ac6374a4d3e0da974716053a04012d"
+            "7d65300eb39e3146df345081f8a5a403fb180825e7f95f8de41b7181fb1b8e41"
         ),
         CallType.GRADE_PROBE: (
             "b2fddf2971da9da7bfd6a191d897429b79ab15bd80058fc32215f3fbd1451941"
@@ -983,3 +986,43 @@ class TestSegmentOneAsksForTheRungsText:
             )
             assert "Write the hint for the rung you are given" not in text
             assert "Rung three is the last one" not in text
+
+
+class TestSegmentOneAsksForTheShortFormReveal:
+    """[ADR-0019](../docs/adr/0019-resolved-blank-text-comes-from-the-service.md).
+
+    Declaring `revealed_answer` in the schema only makes room for it. A field
+    segment 1 never mentions is a field the model omits, and the gap it exists
+    to fill would have stayed empty on every rung-three close — the fix inert
+    on exactly the path it was written for. ADR-0016 had to do the same for
+    `hint`.
+    """
+
+    def _instruction(self) -> str:
+        return prompting.assemble(
+            CallType.GRADE_ANSWER,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+            current_blank_id="b1",
+            current_guess="the stack frame",
+            hint_rung=3,
+        ).segment_1.text
+
+    def test_the_instruction_names_the_field(self):
+        assert "revealed_answer" in self._instruction()
+
+    def test_the_instruction_asks_for_a_phrase_and_not_a_sentence(self):
+        """The whole point of the field: the hint explains, this one names, and
+        what fits in a gap is a noun phrase."""
+        instruction = self._instruction().lower()
+
+        assert "phrase" in instruction
+
+    def test_the_instruction_still_forbids_handing_back_the_rubric(self):
+        """The guard is structural (`_safe_revealed_answer`), but segment 1
+        asking for a short reveal must not read as permission to paste the
+        rubric into it."""
+        instruction = self._instruction()
+
+        assert "rubric" in instruction

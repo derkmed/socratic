@@ -172,10 +172,11 @@ def graded(
     tutor_line: str | None = None,
     probe_question: str | None = None,
     hint: str | None = None,
+    revealed_answer: str | None = None,
     message_id: str = "msg_grade_1",
     **counters: int,
 ) -> ModelResponse:
-    """One `grade_answer` response: the verdict and the three nullable fields.
+    """One `grade_answer` response: the verdict and the four nullable fields.
 
     Optional fields are *omitted* rather than sent as null when they have no
     value — segment 1 tells the model to omit rather than fill with filler, so
@@ -188,6 +189,8 @@ def graded(
         payload["probe_question"] = probe_question
     if hint is not None:
         payload["hint"] = hint
+    if revealed_answer is not None:
+        payload["revealed_answer"] = revealed_answer
     return ModelResponse(
         content=json.dumps(payload), message_id=message_id, **counters
     )
@@ -1815,3 +1818,216 @@ class TestOneSealPredicateServesEveryProbeCase:
             quiz_session.dismiss_probe(
                 learner_id=LEARNER, attempt_id=attempt.attempt_id, blank_id="b1"
             )
+
+
+class TestTheShortFormRevealIsGuardedOnItsOwnTerms:
+    """[ADR-0019](../docs/adr/0019-resolved-blank-text-comes-from-the-service.md).
+
+    `revealed_answer` approaches the answer key by design — naming the answer
+    is the whole job of the field — so it cannot wear `_safe_hint`, which drops
+    anything carrying the rubric. Same fail-closed posture, different
+    threshold: a phrase that names the answer is the point, a body of text that
+    hands over the grading criteria is the leak.
+    """
+
+    def test_a_phrase_that_names_the_answer_survives(self):
+        """The case `_safe_hint` would have destroyed. A rubric short enough to
+        be quoted inside a legitimate reveal is a known false positive there,
+        and here it would fire on the field's intended use."""
+        blank = advanced_blank()
+
+        assert session_module._safe_revealed_answer(blank, "entropy") == "entropy"
+
+    def test_a_reveal_reproducing_the_rubric_is_dropped(self):
+        """Custody is structural, not advisory (D4, ADR-0003). The rubric
+        fixture is well under the length cap, so this is the check earning its
+        keep rather than the cap catching it by accident."""
+        blank = advanced_blank()
+
+        revealed = session_module._safe_revealed_answer(
+            blank, f"The answer: {RUBRIC} (b1)"
+        )
+
+        assert revealed is None
+
+    def test_whitespace_does_not_launder_the_rubric(self):
+        """A rubric rewrapped is the same disclosure, exactly as in
+        `_safe_hint`."""
+        blank = advanced_blank()
+        rewrapped = f"{RUBRIC} (b1)".replace(" ", "\n  ")
+
+        assert session_module._safe_revealed_answer(blank, rewrapped) is None
+
+    def test_a_reveal_longer_than_a_phrase_is_dropped(self):
+        """A gap is a noun-phrase-shaped hole. Anything paragraph-sized is not
+        a reveal, whatever it contains — the cap is what makes this guard
+        narrower than `_safe_hint` rather than merely different."""
+        blank = advanced_blank()
+        essay = "the quantity that never decreases, " * 20
+
+        assert session_module._safe_revealed_answer(blank, essay) is None
+
+    def test_a_blank_with_no_rubric_is_left_alone(self):
+        assert (
+            session_module._safe_revealed_answer(novice_blank(), "entropy") == "entropy"
+        )
+
+    def test_nothing_revealed_stays_nothing(self):
+        assert session_module._safe_revealed_answer(advanced_blank(), None) is None
+
+
+class TestWhatFillsTheGapWhenABlankResolves:
+    """[ADR-0019](../docs/adr/0019-resolved-blank-text-comes-from-the-service.md)
+    and [#127](https://github.com/derkmed/socratic/issues/127).
+
+    The resolved text is the service's to state. Before this the client
+    reconstructed it by scanning the rendered document for an option id — which
+    are blank-scoped, so it usually found another blank's option — and on the
+    Advanced path fell back to the learner's own wrong answer.
+    """
+
+    def test_a_correct_click_resolves_to_the_option_text_not_its_id(self):
+        """The id is `b1-o1`; the gap gets the words."""
+        attempt = attempt_for(novice_quiz())
+        quiz_session, _ = wire(attempt)
+
+        result = submit(quiz_session, attempt, "b1", "b1-o1")
+
+        assert result.resolved_answer == "entropy"
+
+    def test_a_novice_rung_three_resolves_to_the_revealed_option_text(self):
+        attempt = attempt_for(novice_quiz())
+        quiz_session, _ = wire(attempt)
+
+        for _ in range(3):
+            result = submit(quiz_session, attempt, "b1", "b1-o2")
+
+        assert result.blank_resolved
+        assert result.resolved_answer == "entropy"
+
+    def test_an_unresolved_blank_has_nothing_to_put_in_the_gap(self):
+        """Rungs one and two leave the blank open, so there is no gap to fill
+        and no reveal to make."""
+        attempt = attempt_for(novice_quiz())
+        quiz_session, _ = wire(attempt)
+
+        result = submit(quiz_session, attempt, "b1", "b1-o2")
+
+        assert not result.blank_resolved
+        assert result.resolved_answer is None
+
+    def test_a_correct_advanced_answer_resolves_to_the_learners_own_words(self):
+        """Their sentence now. Canonising it would silently rewrite what they
+        wrote, and would need a field nobody added."""
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(graded("correct"))
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        result = submit(quiz_session, attempt, "b1", "entropy climbs")
+
+        assert result.resolved_answer == "entropy climbs"
+
+    def test_an_advanced_rung_three_resolves_to_the_short_form_reveal(self):
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(
+            *(
+                graded("incorrect", hint="h", revealed_answer="entropy")
+                for _ in range(3)
+            )
+        )
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        for _ in range(3):
+            result = submit(quiz_session, attempt, "b1", "heat")
+
+        assert result.blank_resolved
+        assert result.resolved_answer == "entropy"
+
+    def test_an_advanced_rung_three_never_resolves_to_the_wrong_answer(self):
+        """The defect itself. The model omitted `revealed_answer`, the blank
+        closes anyway, and what must NOT appear in the gap is `heat` — the
+        learner's third wrong guess, which is what shipped before #127."""
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(*(graded("incorrect", hint="h") for _ in range(3)))
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        for _ in range(3):
+            result = submit(quiz_session, attempt, "b1", "heat")
+
+        assert result.blank_resolved
+        assert result.resolved_answer is None
+
+    def test_a_reveal_that_leaks_the_rubric_leaves_the_gap_empty(self):
+        """Fails closed all the way to the caller: the guard drops it and
+        nothing downstream substitutes the guess (D4, ADR-0003)."""
+        attempt = attempt_for(advanced_quiz())
+        stub = grading_stub(
+            *(
+                graded("incorrect", hint="h", revealed_answer=f"{RUBRIC} (b1)")
+                for _ in range(3)
+            )
+        )
+        quiz_session, _ = wire(attempt, model_client=stub)
+
+        for _ in range(3):
+            result = submit(quiz_session, attempt, "b1", "heat")
+
+        assert result.resolved_answer is None
+        assert RUBRIC not in repr(dataclasses.astuple(result))
+
+
+class TestTheProbePathFillsTheGapTheSameWay:
+    """A failed probe whose re-open cap is spent "reveals and moves on"
+    (ADR-0009, acceptance 15) — the same close as rung three, and so the same
+    obligation to say what goes in the gap (ADR-0019).
+
+    `ProbeAnswer` already carried `revealed_option_id` and the client already
+    ignored it, so this path had the defect of #127 with none of its symptom:
+    it filled the gap with nothing at all.
+    """
+
+    def _reopening_session(self, attempt, *responses):
+        reopening = ModeRegistry(
+            {
+                DifficultyMode.NOVICE: dataclasses.replace(
+                    NOVICE_POLICY,
+                    probe_failure_behavior=ProbeFailureBehavior.REOPEN_BLANK,
+                )
+            }
+        )
+        attempts = InMemoryAttemptRepository()
+        attempts.save(attempt)
+        return QuizSession(
+            model_client=RecordingModelClient(
+                {CallType.GRADE_PROBE: list(responses)}
+            ),
+            attempts=attempts,
+            registry=reopening,
+            clock=frozen_clock,
+            rng=random.Random(0),
+        )
+
+    def test_a_probe_that_reveals_says_what_goes_in_the_gap(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        quiz_session = self._reopening_session(
+            attempt, probed("incorrect"), probed("incorrect")
+        )
+        submit(quiz_session, attempt, "b1", "b1-o1")
+        answer_probe(quiz_session, attempt, "b1", "I guessed.")
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        second = answer_probe(quiz_session, attempt, "b1", "Still guessing.")
+
+        assert second.blank_resolved is True
+        assert second.revealed_option_id == "b1-o1"
+        assert second.resolved_answer == "entropy"
+
+    def test_a_probe_that_reopens_reveals_nothing_to_put_in_the_gap(self):
+        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
+        quiz_session = self._reopening_session(attempt, probed("incorrect"))
+        submit(quiz_session, attempt, "b1", "b1-o1")
+
+        answer = answer_probe(quiz_session, attempt, "b1", "I guessed.")
+
+        assert answer.blank_reopened is True
+        assert answer.resolved_answer is None

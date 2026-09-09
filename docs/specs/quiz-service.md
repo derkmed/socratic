@@ -128,6 +128,17 @@ spent (`Submission` docstring, ADR-0009). A test asserts that authoring a quiz
 whose correct option is a known sentinel never puts that sentinel in the author
 response body.
 
+`resolved_html` on a submission and on a probe answer is **what goes in the gap**
+when a blank closes, rendered inline by `payloads.label_html`
+([ADR-0019](../adr/0019-resolved-blank-text-comes-from-the-service.md)). It is
+not a second disclosure: on a correct answer it is what the learner already
+knows they said, and on a reveal it is the text of the option
+`revealed_option_id` already named. It exists because the client used to
+reconstruct it by scanning the rendered document for a matching option id —
+which, option ids being blank-scoped, usually found a different blank's option
+([#127](https://github.com/derkmed/socratic/issues/127)). A null means the gap
+stays empty and never means "use what the learner typed".
+
 ### Containers
 
 `Dockerfile` (service, `python:3.10-slim`, installs `.[service,anthropic,rendering]`)

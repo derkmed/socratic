@@ -581,6 +581,16 @@ the last one: the blank closes after it and the learner does not answer again,
 so state the answer plainly and give one sentence saying why it is the answer.
 A rung three that withholds is not restraint, it is a dead end.
 
+Rung three also closes the blank, and the gap in the passage has to be filled
+with something. Where the supplied schema includes `revealed_answer`, give the
+answer there as well as in the hint — but as the **phrase that goes in the
+gap**, not as a sentence: the words that would have been there had the blank
+never been made. The hint explains; this names. It is a nullable field: leave it
+null on any rung but three, and on a correct answer. The same rule about the
+rubric applies with no softening — name the answer in your own words; a
+`revealed_answer` that hands back the rubric's wording has published the key
+just as surely as a hint that does, and it will be dropped.
+
 Write the hint in your own words, pitched at the answer this learner actually
 gave. The rubric supplied with the blank is the answer key and the grading
 criteria: use it to judge, and to know what the answer is, but never reproduce

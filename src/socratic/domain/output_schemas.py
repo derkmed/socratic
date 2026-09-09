@@ -173,9 +173,10 @@ GRADE_ANSWER: Schema = _strict(
         "tutor_line": NULLABLE_STRING,
         "probe_question": NULLABLE_STRING,
         "hint": NULLABLE_STRING,
+        "revealed_answer": NULLABLE_STRING,
     }
 )
-"""One response, four things (ADR-0013 as extended by
+"""One response, five things (ADR-0013 as extended by
 [ADR-0016](../../../docs/adr/0016-advanced-hint-rides-the-grading-response.md)).
 
 The reactive tutor line, the probe question and the hint ladder's rung text ride
@@ -188,7 +189,15 @@ ADR-0013 requires - and nothing raised, because both parse as absent.
 blank: an Advanced blank carries no `hints` (the registry forbids them), so
 without this field a wrong Advanced answer had no rung text at all (#56). The
 **client** still selects the rung and states it in the volatile tail; this field
-is the text for that rung. Nullable because a correct answer has no rung."""
+is the text for that rung. Nullable because a correct answer has no rung.
+
+`revealed_answer` is the fifth, and it is not a second hint
+([ADR-0019](../../../docs/adr/0019-resolved-blank-text-comes-from-the-service.md)).
+`hint` explains at rung three; this **names**, in the few words that fit in the
+gap the blank left behind. An Advanced reveal is prose and a gap is a
+noun-phrase-shaped hole, so without this the blank closed with nothing to put in
+it - or, before #127, with the learner's own wrong answer. Nullable for the same
+reason `hint` is: a correct answer reveals nothing."""
 
 GRADE_PROBE: Schema = _strict({"verdict": VERDICT, "correction": STRING})
 """The verdict on a self-explanation, and the correction that goes with it.

@@ -238,6 +238,27 @@ def _tutor_line_html(submission: session_module.Submission) -> Optional[str]:
     return html_of(grading.tutor_line)
 
 
+def _resolved_html(resolved_answer: str | None) -> str | None:
+    """What goes in the gap, rendered — or `None` when there is nothing to put
+    there.
+
+    `label_html` rather than `html_of`, for the reason `label_html` exists: the
+    fragment lands inline in the middle of a sentence, and the block render's
+    `<p>` would carry paragraph margins in with it (#98).
+
+    This is the field that replaced the client scanning the rendered document
+    for an option id
+    ([ADR-0019](../../../docs/adr/0019-resolved-blank-text-comes-from-the-service.md),
+    [#127](https://github.com/derkmed/socratic/issues/127)). A null here means
+    the gap stays empty; it never means "fall back to what the learner typed",
+    which is the defect that made an Advanced blank close showing the wrong
+    answer.
+    """
+    if resolved_answer is None:
+        return None
+    return label_html(resolved_answer)
+
+
 def submission_body(
     submission: session_module.Submission, *, capability_token: str
 ) -> dict[str, Any]:
@@ -250,6 +271,7 @@ def submission_body(
         ),
         "tutor_line_html": _tutor_line_html(submission),
         "revealed_option_id": submission.revealed_option_id,
+        "resolved_html": _resolved_html(submission.resolved_answer),
         "blank_resolved": submission.blank_resolved,
         "attempt_sealed": submission.attempt_sealed,
         "probe": _probe_body(submission.probe_asked),
@@ -268,6 +290,7 @@ def probe_answer_body(
         "blank_reopened": answer.blank_reopened,
         "blank_resolved": answer.blank_resolved,
         "revealed_option_id": answer.revealed_option_id,
+        "resolved_html": _resolved_html(answer.resolved_answer),
         "attempt_sealed": answer.attempt_sealed,
         "capability_token": capability_token,
     }

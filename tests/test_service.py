@@ -1949,3 +1949,84 @@ class TestAnOptionLabelIsInline:
 
         for option in body["blanks"][0]["options"]:
             assert "<p>" not in option["text_html"], option
+
+
+class TestTheResolvedTextReachesTheWire:
+    """[ADR-0019](../docs/adr/0019-resolved-blank-text-comes-from-the-service.md)
+    and [#127](https://github.com/derkmed/socratic/issues/127).
+
+    The client used to reconstruct the gap's text by scanning the rendered
+    document for an option id. Option ids are blank-scoped, so it usually found
+    a different blank's option and pasted that. The service states it instead.
+    """
+
+    def _submission(self, **overrides):
+        fields = dict(
+            verdict=Verdict.CORRECT,
+            graded_by=GradingStrategy.DETERMINISTIC,
+            hint_rung_shown=None,
+            feedback=None,
+            revealed_option_id=None,
+            blank_resolved=True,
+            attempt_sealed=False,
+        )
+        fields.update(overrides)
+        return session_module.Submission(**fields)
+
+    def test_the_resolved_text_travels_as_inline_html(self):
+        """`label_html`, not `html_of`: the fragment lands in the middle of a
+        sentence, and a `<p>` wrapper would carry block margins into it (#98)."""
+        body = payloads.submission_body(
+            self._submission(resolved_answer="entropy"),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] == "entropy"
+
+    def test_markup_in_the_resolved_text_is_sanitised_like_everything_else(self):
+        body = payloads.submission_body(
+            self._submission(resolved_answer="`OrderedDict`"),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] == "<code>OrderedDict</code>"
+
+    def test_a_blank_that_did_not_resolve_sends_null(self):
+        body = payloads.submission_body(
+            self._submission(blank_resolved=False, resolved_answer=None),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] is None
+
+    def test_the_disclosure_marker_still_travels_beside_it(self):
+        """`revealed_option_id` stays: it is what ADR-0003 accounts for. What
+        changed is that no displayable text is derived from it."""
+        body = payloads.submission_body(
+            self._submission(
+                verdict=Verdict.INCORRECT,
+                hint_rung_shown=3,
+                revealed_option_id="b1-o1",
+                resolved_answer="entropy",
+            ),
+            capability_token="rotated",
+        )
+
+        assert body["revealed_option_id"] == "b1-o1"
+        assert body["resolved_html"] == "entropy"
+
+    def test_the_probe_path_carries_it_too(self):
+        body = payloads.probe_answer_body(
+            session_module.ProbeAnswer(
+                verdict=Verdict.INCORRECT,
+                correction="Not quite.",
+                blank_reopened=False,
+                blank_resolved=True,
+                revealed_option_id="b1-o1",
+                attempt_sealed=False,
+                resolved_answer="entropy",
+            ),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] == "entropy"
