@@ -192,6 +192,12 @@ class QuizAuthoring:
             # one call a learner blocks on (ADR-0011) into the prompt that call
             # reads.
             blank_range=policy.blank_range,
+            # The same mode, said to the *schema* rather than to the prose.
+            # Segment 1 tells the model it is answering "against a schema
+            # supplied with the request" and no prompt names the mode at all,
+            # so this is what makes an Advanced call produce Advanced blanks
+            # rather than novice-shaped ones the validator then refuses (#114).
+            mode=mode,
         )
         response = self._model_client.author_skeleton(segments)
 
@@ -268,6 +274,9 @@ class QuizAuthoring:
             profile=profile or prompting.LearnerProfile(learner_id=learner_id),
             probe_cadence=probe_cadence,
             quiz=quiz,
+            # Through `key_for` so the schema is looked up under the key the
+            # registry holds, whichever spelling the quiz was stored with (#89).
+            mode=self._registry.key_for(quiz.mode),
         )
         response = self._model_client.author_pedagogy(segments)
 
