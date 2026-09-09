@@ -1,0 +1,42 @@
+# Two containers, composed: Open WebUI and the quiz service (D15, ADR-0015).
+#
+# The prototype targets a **default** Open WebUI install — `IFRAME_CSP` unset —
+# because that is the only configuration in which the sandboxed, opaque-origin
+# iframe can `fetch` the service at all. Under the hardening docs' recommended
+# CSP the iframe has no network path here, which is a different architecture
+# rather than a degraded one (master spec, Out of scope).
+#
+# No host networking and no bind mount of build output, so `docker compose up`
+# behaves the same on Mac, Windows and Linux.
+
+services:
+  quiz-service:
+    build: .
+    environment:
+      # Both secrets come from the host environment; neither has a default,
+      # so a missing one fails at startup rather than silently weakening.
+      SOCRATIC_TOKEN_SECRET: ${SOCRATIC_TOKEN_SECRET:?set a secret of >=32 bytes}
+      SOCRATIC_SERVICE_TOKEN: ${SOCRATIC_SERVICE_TOKEN:?set the Pipe's service token}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?authoring makes a live model call}
+    ports:
+      # Published to the host because the iframe fetches it from the learner's
+      # browser, not from inside the compose network.
+      - "8080:8080"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    depends_on:
+      - quiz-service
+    environment:
+      # The Pipe reaches the service by its compose DNS name; the iframe
+      # reaches it from the browser, which is why the two differ.
+      SOCRATIC_SERVICE_URL: http://quiz-service:8080
+      SOCRATIC_SERVICE_URL_FOR_BROWSER: http://localhost:8080
+      SOCRATIC_SERVICE_TOKEN: ${SOCRATIC_SERVICE_TOKEN:?set the Pipe's service token}
+    ports:
+      - "3000:8080"
+    volumes:
+      - open-webui-data:/app/backend/data
+
+volumes:
+  open-webui-data:

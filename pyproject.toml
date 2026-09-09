@@ -25,7 +25,19 @@ rendering = [
     "Pygments>=2.17",        # fenced-code highlighting, inlined not linked
     "latex2mathml>=3.77",    # LaTeX to MathML, server-side
 ]
-dev = ["pytest>=8", "tomli>=2; python_version < '3.11'"]
+# The HTTP service is an extra by the same rule as the two above: the domain
+# installs and tests with no third-party package at all, and nothing under
+# `socratic.domain` may import any of these. `socratic.service` is the only
+# importer — ADR-0015, master spec §10, `docs/specs/quiz-service.md`.
+service = [
+    "fastapi>=0.115",   # routing, request models, dependency-ordered auth
+    "uvicorn>=0.30",    # the ASGI server the container runs
+]
+dev = [
+    "pytest>=8",
+    "tomli>=2; python_version < '3.11'",
+    "httpx>=0.27",      # FastAPI's TestClient transport; no socket is opened
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/socratic"]

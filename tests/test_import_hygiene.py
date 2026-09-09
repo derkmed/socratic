@@ -229,3 +229,72 @@ def test_the_child_interpreter_reports_non_ascii_diagnostics_intact(monkeypatch)
 
     assert result.returncode != 0
     assert "the domain — imported the SDK" in result.stderr
+
+
+# --- The process boundary (issue #19, acceptance 37) -------------------------
+#
+# ADR-0002 named "an Open WebUI import creeping into the domain package" as the
+# failure mode to watch, and admitted that nothing enforced it but review.
+# ADR-0015 makes the seam physical: the domain runs in its own process, in an
+# image that does not have Open WebUI installed, so such an import would not
+# resolve. These two keep the *source* honest as well, because a grep test is
+# what fails on the pull request rather than in the container.
+
+SERVICE_PACKAGE = "service"
+
+OPEN_WEBUI_ROOTS = frozenset({"open_webui", "openwebui"})
+
+
+def test_nothing_in_the_package_imports_open_webui():
+    offenders = {
+        str(path): sorted(roots & OPEN_WEBUI_ROOTS)
+        for path, roots in _imported_roots().items()
+        if roots & OPEN_WEBUI_ROOTS
+    }
+    assert offenders == {}, (
+        "Open WebUI is the host, not a dependency (ADR-0002, ADR-0015): "
+        f"{offenders}"
+    )
+
+
+def test_the_domain_does_not_import_the_service():
+    """The dependency runs one way.
+
+    `test_the_domain_imports_only_the_standard_library_and_itself` allows the
+    whole `socratic` root, so it would not catch this: the service is a
+    `socratic` module too. But the service is the shell around the domain, and
+    a domain module reaching back into it would put FastAPI below the seam
+    while every existing guard stayed green.
+    """
+    offenders = {
+        str(path): sorted(modules)
+        for path, modules in _imported_submodules().items()
+        if path.parts[0] == DOMAIN_PACKAGE and SERVICE_PACKAGE in modules
+    }
+    assert offenders == {}, f"domain modules importing the service: {offenders}"
+
+
+def _imported_submodules() -> dict[pathlib.Path, set[str]]:
+    """The `socratic.<name>` subpackages each module imports.
+
+    A second scan rather than a widening of `_imported_roots`, which reports
+    only top-level roots and is depended on by the guards above.
+    """
+    per_file: dict[pathlib.Path, set[str]] = {}
+    for path in sorted(SOURCE_ROOT.rglob("*.py")):
+        found: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    found.update(_socratic_child(alias.name))
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.update(_socratic_child(node.module))
+        per_file[path.relative_to(SOURCE_ROOT)] = found
+    return per_file
+
+
+def _socratic_child(dotted: str) -> set[str]:
+    parts = dotted.split(".")
+    if len(parts) >= 2 and parts[0] == "socratic":
+        return {parts[1]}
+    return set()
