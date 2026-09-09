@@ -200,6 +200,30 @@ class TestASecondInquiryMidQuiz:
         stored = attempts.get(LEARNER, started.attempt.attempt_id)
         assert stored.queued_topics == ("What is the third law?",)
 
+    def test_the_others_on_the_queue_exclude_the_question_just_saved(self):
+        """What a reader should show: the queue, less this inquiry.
+
+        The attempt's queue legitimately holds it - that is what parking a
+        question means - so the exclusion belongs to the reader, not to the
+        write.
+        """
+        intake, _, _ = build(quiz_payload())
+        _raise(intake, "Why does heat flow?")
+        _raise(intake, "What is the third law?")
+
+        queued = _raise(intake, "What is absolute zero?")
+
+        assert "What is absolute zero?" in queued.attempt.queued_topics
+        assert queued.others == ("What is the third law?",)
+
+    def test_the_others_are_empty_when_it_is_the_only_question_parked(self):
+        intake, _, _ = build(quiz_payload())
+        _raise(intake, "Why does heat flow?")
+
+        queued = _raise(intake, "What is the third law?")
+
+        assert queued.others == ()
+
     def test_the_queue_keeps_the_order_the_questions_were_asked_in(self):
         intake, _, _ = build(quiz_payload())
         _raise(intake, "Why does heat flow?")
@@ -232,16 +256,20 @@ class TestASecondInquiryMidQuiz:
         stored = attempts.get(LEARNER, started.attempt.attempt_id)
         assert stored.queued_topics == ()
 
-    def test_it_joins_the_queue_the_quiz_was_authored_with(self):
+    def test_a_quiz_is_authored_with_an_empty_queue(self):
+        """CONTEXT: Queued topics - questions *the learner* raised.
+
+        `quiz_payload` carries a `queued_topics` the model invented, and
+        authoring drops it. So the first question a learner parks is the first
+        thing on the queue, rather than joining a list they never wrote.
+        """
         intake, _, _ = build(quiz_payload(queued_topics=("the third law",)))
-        _raise(intake, "Why does heat flow?")
+        started = _raise(intake, "Why does heat flow?")
+        assert started.attempt.queued_topics == ()
 
         queued = _raise(intake, "What is absolute zero?")
 
-        assert queued.attempt.queued_topics == (
-            "the third law",
-            "What is absolute zero?",
-        )
+        assert queued.attempt.queued_topics == ("What is absolute zero?",)
 
     def test_nothing_here_abandons_anything(self):
         # Acceptance 6: `abandoned` is written only on explicit displacement.
@@ -334,25 +362,17 @@ class TestStartThisInstead:
         stored = attempts.get(LEARNER, started.attempt.attempt_id)
         assert stored.queued_topics == ("What is absolute zero?",)
 
-    def test_the_inherited_queue_leads_the_new_quizs_own(self):
+    def test_the_new_quiz_inherits_the_queue_and_adds_nothing_of_its_own(self):
+        """The carried queue is the whole queue.
+
+        The quiz being authored here emits a `queued_topics` of its own, which
+        authoring drops (CONTEXT: Queued topics) - so what the new attempt
+        holds is exactly what the displaced one had, less the question now
+        being answered.
+        """
         intake, _, _ = build(
             quiz_payload(),
             quiz_payload(queued_topics=("what a Carnot cycle is",)),
-        )
-        _raise(intake, "Why does heat flow?")
-        _raise(intake, "What is absolute zero?")
-
-        started = _instead(intake, "What is the third law?")
-
-        assert started.attempt.queued_topics == (
-            "What is absolute zero?",
-            "what a Carnot cycle is",
-        )
-
-    def test_a_topic_on_both_queues_is_carried_once(self):
-        intake, _, _ = build(
-            quiz_payload(),
-            quiz_payload(queued_topics=("What is absolute zero?",)),
         )
         _raise(intake, "Why does heat flow?")
         _raise(intake, "What is absolute zero?")

@@ -63,7 +63,6 @@ CallType = prompting.CallType
 
 STRING: Schema = {"type": "string"}
 NULLABLE_STRING: Schema = {"type": ["string", "null"]}
-STRINGS: Schema = {"type": "array", "items": {"type": "string"}}
 
 VERDICT: Schema = {
     "type": "string",
@@ -119,7 +118,7 @@ limit, and a union rather than one node with three nullable fields so that a
 
 _DIRECT_ANSWER: Schema = _tagged(
     authoring.DIRECT_ANSWER,
-    {"answer": STRING, "topic": STRING, "queued_topics": STRINGS},
+    {"answer": STRING, "topic": STRING},
 )
 """The override branch (ADR-0004): medical, legal, financial, security, an
 active outage, or a learner who needs the answer now.
@@ -145,7 +144,6 @@ def _skeleton_envelope(fragment: Mapping[str, object]) -> Schema:
                     "explanation": {"type": "array", "items": _SEGMENT},
                     "blanks": {"type": "array", "items": dict(fragment)},
                     "recap": NULLABLE_STRING,
-                    "queued_topics": STRINGS,
                 },
             ),
             _DIRECT_ANSWER,
