@@ -136,6 +136,21 @@ def _probe_body(probe) -> Optional[dict[str, Any]]:
     return {"blank_id": probe.blank_id, "question_html": html_of(probe.question)}
 
 
+def _tutor_line_html(submission: session_module.Submission) -> Optional[str]:
+    """The reactive tutor line, rendered, or null (D13, ADR-0013).
+
+    Read off `model_grading` rather than off the submission, because that is
+    where the field lives and why: the deterministic strategy never builds a
+    `ModelGrading`, so Novice has no route to a tutor line at all rather than a
+    field that happens always to be null. Reaching through the group is what
+    keeps that structural on the wire too.
+    """
+    grading = submission.model_grading
+    if grading is None or not grading.tutor_line:
+        return None
+    return html_of(grading.tutor_line)
+
+
 def submission_body(
     submission: session_module.Submission, *, capability_token: str
 ) -> dict[str, Any]:
@@ -146,6 +161,7 @@ def submission_body(
         "feedback_html": (
             html_of(submission.feedback) if submission.feedback else None
         ),
+        "tutor_line_html": _tutor_line_html(submission),
         "revealed_option_id": submission.revealed_option_id,
         "blank_resolved": submission.blank_resolved,
         "attempt_sealed": submission.attempt_sealed,
