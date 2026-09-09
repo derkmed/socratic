@@ -171,7 +171,7 @@ class QuizAuthoring:
         """
         if not inquiry.strip():
             raise ValueError("an inquiry is required to author against")
-        self._registry.policy_for(mode)
+        policy = self._registry.policy_for(mode)
 
         segments = prompting.assemble(
             prompting.CallType.AUTHOR_SKELETON,
@@ -179,6 +179,12 @@ class QuizAuthoring:
             probe_cadence=probe_cadence,
             quiz=None,
             inquiry=inquiry,
+            # The bound the model is about to be judged against, said out loud
+            # (#72). `ensure_valid_quiz` below still enforces it — this only
+            # moves the mode's `blank_range` from a post-hoc rejection on the
+            # one call a learner blocks on (ADR-0011) into the prompt that call
+            # reads.
+            blank_range=policy.blank_range,
         )
         response = self._model_client.author_skeleton(segments)
 

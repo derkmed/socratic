@@ -150,6 +150,9 @@ toggles switch client behaviour; instructions that genuinely must vary go in
 segment 2.
 
 **Segment 2** — learner profile, quiz, and blank rubrics. Per learner, per session.
+Also carries anything that varies by *mode*: the mode's `blank_range` is stated
+here on the authoring call, because segment 1 is one prefix for the whole
+workspace and the schema fragment cannot express an array count.
 
 **Volatile tail** — guesses so far in order, then the current blank and guess.
 Never cached.

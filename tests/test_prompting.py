@@ -22,6 +22,7 @@ import pytest
 from socratic.domain import prompting
 from socratic.domain.ids import new_quiz_session_id
 from socratic.domain.modes import DifficultyMode, ProbeCadence
+from socratic.domain.registry import BlankRange
 from socratic.domain.prompting import (
     CallType,
     LearnerProfile,
@@ -708,3 +709,84 @@ class TestSegmentsValue:
                 profile=ADA,
                 probe_cadence=ProbeCadence.OFF,
             )
+
+
+class TestTheBlankBound:
+    """Issue #72: the admissible blank count reaches the model as *text*.
+
+    `minItems`/`maxItems` are outside the JSON-Schema subset structured outputs
+    accept, so no fragment the registry supplies can carry the bound. It has to
+    be said in the prompt, and ADR-0006 leaves exactly one position open to it:
+    segment 2, because the bound varies by mode and segment 1 may not.
+    """
+
+    def test_segment_one_no_longer_delegates_the_count_to_the_schema(self):
+        text = prompting.assemble(
+            CallType.AUTHOR_SKELETON, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
+        ).segment_1.text
+        assert "fixed by the schema fragment" not in text, (
+            "segment 1 still promises a constraint the structured-output "
+            "schema subset cannot express (#72)"
+        )
+
+    def test_a_supplied_bound_reaches_segment_two(self):
+        segments = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            blank_range=BlankRange(4, 6),
+        )
+        text = segments.segment_2.text
+        assert "4" in text and "6" in text
+
+    def test_the_bound_never_reaches_segment_one(self):
+        # The ADR-0006 half this change could plausibly break: segment 1 is one
+        # cache prefix for the whole workspace, and the bound varies by mode.
+        prefixes = {
+            prompting.assemble(
+                CallType.AUTHOR_SKELETON,
+                profile=ADA,
+                probe_cadence=ProbeCadence.SOMETIMES,
+                blank_range=blank_range,
+            ).segment_1.text
+            for blank_range in (None, BlankRange(1, 2), BlankRange(4, 6))
+        }
+        assert len(prefixes) == 1, "the blank bound split segment 1's cache prefix"
+
+    def test_two_modes_bounds_produce_different_segment_twos(self):
+        novice = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            blank_range=BlankRange(1, 2),
+        ).segment_2.text
+        advanced = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            blank_range=BlankRange(4, 6),
+        ).segment_2.text
+        assert novice != advanced
+
+    def test_no_bound_renders_no_bound_section(self):
+        without = prompting.assemble(
+            CallType.GRADE_ANSWER,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_quiz(),
+        ).segment_2.text
+        assert "Blanks to author" not in without
+
+    def test_the_bound_is_optional_so_existing_callers_are_untouched(self):
+        # Same shape as TestInquiry's equivalent: a new keyword must not
+        # perturb a call that does not pass it.
+        explicit = prompting.assemble(
+            CallType.AUTHOR_SKELETON,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            blank_range=None,
+        )
+        implicit = prompting.assemble(
+            CallType.AUTHOR_SKELETON, profile=ADA, probe_cadence=ProbeCadence.SOMETIMES
+        )
+        assert explicit == implicit

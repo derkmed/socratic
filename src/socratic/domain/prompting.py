@@ -48,6 +48,7 @@ from typing import Mapping, Sequence
 
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.profiles import LearnerProfile
+from socratic.domain.registry import BlankRange
 from socratic.domain.types import (
     BlankSegment,
     MathSegment,
@@ -174,6 +175,7 @@ def assemble(
     guesses: Sequence[str] = (),
     current_blank_id: str | None = None,
     current_guess: str | None = None,
+    blank_range: BlankRange | None = None,
 ) -> PromptSegments:
     """Lay a request out as ordered cache segments.
 
@@ -196,6 +198,13 @@ def assemble(
         by the caller that owns the `Guess` record.
       current_blank_id: The blank being answered, when there is one.
       current_guess: The answer under consideration, when there is one.
+      blank_range: How many blanks the mode admits, for the call that authors
+        them. Supplied as a value rather than derived from a mode here: the
+        registry stays the only place mode is branched on, and this renders
+        whatever it is handed. It lands in segment 2 because it varies by mode
+        and segment 1 may not (ADR-0006) — the schema fragment cannot carry it
+        either, since array-count keywords are outside the subset structured
+        outputs accept (#72).
 
     Returns:
       The three segments in render order, with breakpoints on the first two.
@@ -217,7 +226,9 @@ def assemble(
             ),
             PromptSegment(
                 role=SegmentRole.SEGMENT_2,
-                text=_render_segment_2(profile=profile, quiz=quiz),
+                text=_render_segment_2(
+                    profile=profile, quiz=quiz, blank_range=blank_range
+                ),
                 cache_control=True,
             ),
             PromptSegment(
@@ -234,8 +245,21 @@ def assemble(
     )
 
 
-def _render_segment_2(*, profile: LearnerProfile, quiz: Quiz | None) -> str:
-    """Learner profile, quiz and blank rubrics. Per learner, per session."""
+def _render_segment_2(
+    *,
+    profile: LearnerProfile,
+    quiz: Quiz | None,
+    blank_range: BlankRange | None = None,
+) -> str:
+    """Learner profile, quiz, blank rubrics, and the mode's blank bound.
+
+    Per learner, per session — which is what lets the blank bound live here at
+    all. It varies by mode, so segment 1 is closed to it (ADR-0006), and the
+    schema fragment cannot express an array count (#72). Segment 2 is not a
+    cross-learner cache prefix, so a call that supplies no bound simply renders
+    no bound section: ADR-0010's "omitting splits the cache too" is about
+    segment 1 and does not bite here.
+    """
     parts = ["## Learner profile", render_profile(profile)]
     if quiz is not None:
         parts.append("## Quiz")
@@ -243,7 +267,29 @@ def _render_segment_2(*, profile: LearnerProfile, quiz: Quiz | None) -> str:
     else:
         parts.append("## Quiz")
         parts.append("(none yet; this call authors or summarises rather than grades)")
+    if blank_range is not None:
+        parts.append("## Blanks to author")
+        parts.append(_render_blank_range(blank_range))
     return "\n\n".join(parts)
+
+
+def _render_blank_range(blank_range: BlankRange) -> str:
+    """State the mode's blank bound as a sentence the model can act on.
+
+    The bound is inclusive at both ends. A degenerate range — a future mode
+    admitting exactly one count — reads as a count rather than as a range,
+    because "between 1 and 1" invites the model to wonder what was meant.
+    """
+    if blank_range.minimum == blank_range.maximum:
+        return (
+            f"Author exactly {blank_range.minimum} blanks. A quiz with any "
+            "other number is discarded before the learner sees it."
+        )
+    return (
+        f"Author between {blank_range.minimum} and {blank_range.maximum} "
+        "blanks, inclusive. A quiz outside that range is discarded before the "
+        "learner sees it."
+    )
 
 
 def _render_quiz(quiz: Quiz) -> str:
@@ -408,9 +454,11 @@ blank, and never nest one segment inside another.
 Choose the blanks so that each one is the load-bearing word or phrase of its
 sentence: the term a learner who understood the passage could supply and one who
 did not could not. Do not mask a term the passage never explains, do not mask
-the same term twice, and do not mask articles, connectives or units. The number
-of blanks admissible for the difficulty mode is fixed by the schema fragment
-supplied with the request; stay inside it.
+the same term twice, and do not mask articles, connectives or units. How many
+blanks the difficulty mode admits is stated as an inclusive range with the
+learner material below these instructions; author a number inside it. That
+range is the mode's pedagogical bound, and it is checked after you answer, so a
+quiz outside it is discarded before the learner sees any of it.
 
 Every blank carries the mode-specific fields the supplied schema fragment
 requires and no others. Give each blank a short stable identifier and reference
