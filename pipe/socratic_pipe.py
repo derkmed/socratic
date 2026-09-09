@@ -1,7 +1,8 @@
 """The Open WebUI Pipe: the adapter, and nothing else.
 
-Paste this file into Open WebUI's admin panel (Workspace → Functions → new
-Pipe). It runs in the **Open WebUI container**, on the far side of the
+Paste this file into Open WebUI's admin panel (bottom-left user bubble →
+Admin Panel → Functions → Create, i.e. `/admin/functions`; not Workspace, where
+older releases kept it). It runs in the **Open WebUI container**, on the far side of the
 portability seam, which is why it is a single self-contained file that imports
 nothing from `socratic`: that package is not installed there, and by ADR-0015
 the seam is a process boundary rather than a convention.
