@@ -140,6 +140,42 @@ The `Guess` record has nowhere to put it.
 cadence randomised ~50% plus the final blank, owned by the client; ladder resumes on
 re-open, capped at one re-open per blank; sealing gated on the final probe.
 
+## Blank placement in code and math — amendment
+
+Added after the source prompt was written. The prompt was written for a plaintext
+chat window, where every blank was necessarily a blank in prose. The renderer of
+[ADR-0012](../adr/0012-iframe-content-rendering.md) makes two more placements
+available, and both are better retrieval practice than a prose paraphrase of the
+same thing.
+
+**When the explanation's substance is code, put the blank in the code.** Mask an
+identifier, a call, an operator, or an argument inside a fenced block or an inline
+code span — not a prose sentence *about* that line. Recalling `dict.get` where it
+is actually written is retrieval; recalling the word "lookup" from a paraphrase is
+vocabulary. Prose masking stays correct for a conceptual explanation that happens
+to mention code.
+
+**When the explanation's substance is mathematical, write it as LaTeX and mask the
+formula.** A relationship stated as a formula is masked as that formula, not as an
+English gloss of it.
+
+Two constraints from the architecture bound this:
+
+- **A math blank masks a whole formula.** ADR-0012 defers blanks *inside* a
+  formula past the prototype — for accessibility reasons, not layout ones — so a
+  masked formula is masked entire: the blank replaces the whole `$...$` or
+  `$$...$$`, never a sub-expression within one. If only one factor of a formula is
+  worth asking about, either mask the whole formula or ask about it in prose.
+- **Code blanks live inside the restricted Markdown subset** — inline code and
+  fenced code blocks with highlighting. Nothing outside that subset is available
+  to carry a blank.
+
+The masking rules from the source prompt apply unchanged in both placements: never
+mask a token the learner already used, each blank independently answerable, and
+the unmasked remainder — the surrounding code or the surrounding prose — coherent
+and correct on its own. A fenced block with so much masked that it no longer reads
+as code fails the third rule exactly as shredded prose does.
+
 ## What survives unchanged, and must
 
 The pedagogy, which is the part that matters and the part an implementer is most
@@ -152,7 +188,9 @@ likely to erode:
   learning consolidates; it is not optional polish.
 - **The override.** Time-sensitive or safety-relevant questions get a direct answer.
 - **Masking rules.** Never mask a term the learner used; every blank independently
-  answerable; unmasked prose coherent on its own.
+  answerable; unmasked prose coherent on its own. And the blank goes where the
+  substance is: inside the code when the answer is code, on the formula when the
+  answer is a formula (see the amendment above).
 - **Grade on meaning, not wording.** Synonyms, paraphrases, misspellings, correct
   mechanisms in non-technical language. Credit partial answers explicitly.
 - **Never state the answer before rung three.**
