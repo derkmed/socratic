@@ -46,7 +46,7 @@ Two provenance notes, because they change how much the citations below are worth
 | Tools receive `__user__`, own `Valves`, own `UserValves` | Yes, all three | Read from source |
 | Actions receive `__user__`, own `Valves`, own `UserValves` | Yes, all three — but no `__metadata__`, `__files__`, `__task__`, `__oauth_token__` | Read from source |
 | `IFRAME_CSP` unset ⇒ `injectCsp` is a no-op on both paths | Yes | Read from source |
-| Sandbox on both paths: `allow-scripts`, no `allow-same-origin` | Yes; `allow-downloads` on. `allow-forms` differs by surface: `?? true` on the CodeBlock/artifact frame, `?? false` on the `src={embed}` frame | Read from source |
+| Sandbox on both paths: `allow-scripts`, no `allow-same-origin` | Yes. `allow-forms` differs by surface: `?? true` on the message-level `message.embeds` frame (the Pipe path) and on CodeBlock/artifact; `?? false` only on the tool-call collapsible | Read from source |
 | An embed frame may drive the prompt box; an artifact frame may not | Yes — only `FullHeightIframe` registers its window as trusted | Read from source |
 
 ## Q1 — does a fenced ` ```html ` block in a `str` render richly?
@@ -115,10 +115,11 @@ sandbox="{($settings?.iframeSandboxAllowScripts ?? true) ? 'allow-scripts' : ''}
 `IFRAME_CSP` defaults to `''` (`config.py:1745`, surfaced at `main.py:2403`) and
 `injectCsp` returns the HTML unchanged when the CSP is empty (`src/lib/utils/csp.ts`).
 Sandbox defaults: `allow-scripts` on, `allow-downloads` on, `allow-same-origin`
-off. **`allow-forms` is not uniform**: the CodeBlock/artifact frame takes
-`$settings?.iframeSandboxAllowForms ?? true`, while `FullHeightIframe src={embed}`
-- the embeds path - takes `?? false`. The frame option 3 would use is therefore
-the one *without* forms unless the learner opts in.
+off. **`allow-forms` is not uniform across surfaces**: the message-level
+`message.embeds` frame - the one a Pipe-emitted `embeds` event reaches - takes
+`$settings?.iframeSandboxAllowForms ?? true`, as does the CodeBlock/artifact
+frame. Only the tool-call collapsible's embeds take `?? false`. So the frame
+option 3 uses has forms **on** by default.
 
 **The costs of this route are not in the rendering, they are in the chat.** The
 fenced block is still a code block: `MarkdownTokens.svelte:196` passes
@@ -338,13 +339,11 @@ delivery change. A Tool or Action is what the upstream docs describe, and option
 reaches the same code path without paying for it.
 
 Worth recording independently of the choice: `open-webui-fit.md` says `allow-forms`
-is opt-in. In 0.11.3 that is right for the embed frame (`?? false`) and wrong for
-the CodeBlock/artifact frame (`?? true`) - the default depends on which surface
-renders. Since option 3 uses the embed frame, a `<form>` submit inside the overlay
-would be blocked by default there; ADR-0015 routes answers through `fetch`, not
-form submission, so this constrains nothing today but is a live constraint on any
-future non-`fetch` control. `allow-same-origin` is off by default on both
-(`?? false`), so ADR-0015's opaque-origin reasoning stands.
+is opt-in. In 0.11.3 that is true only of the tool-call collapsible's embeds
+(`?? false`). The message-level `message.embeds` frame and the CodeBlock/artifact
+frame both default it **on** (`?? true`) - the default depends on which surface
+renders, which the old wording flattened. `allow-same-origin` is off by default
+everywhere (`?? false`), so ADR-0015's opaque-origin reasoning stands.
 
 ## Open questions
 
