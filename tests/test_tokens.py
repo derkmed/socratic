@@ -79,15 +79,22 @@ def test_a_token_scoped_to_a_different_session_is_rejected():
         minter.verify(token, for_session=OTHER_SESSION)
 
 
+def _flipped(character: str) -> str:
+    """A character guaranteed to differ from `character`, by construction: it
+    is chosen from the fixed pair `("B", "C")`, of which at most one can equal
+    the input, never against a *different* string the result is later spliced
+    into (that mismatch is issue #60)."""
+    return "B" if character != "B" else "C"
+
+
 def test_a_tampered_token_is_rejected():
     minter = _minter()
     body, signature = minter.mint(SESSION, LEARNER).split(".")
 
-    flipped = "B" if body[0] != "B" else "C"
     with pytest.raises(tokens.CapabilityTokenRejected):
-        minter.verify(f"{flipped}{body[1:]}.{signature}")
+        minter.verify(f"{_flipped(body[0])}{body[1:]}.{signature}")
     with pytest.raises(tokens.CapabilityTokenRejected):
-        minter.verify(f"{body}.{flipped}{signature[1:]}")
+        minter.verify(f"{body}.{_flipped(signature[0])}{signature[1:]}")
 
 
 def test_a_token_signed_with_a_different_secret_is_rejected():
