@@ -11,10 +11,18 @@ What it does, in full:
     __user__["id"]  ->  LearnerId
     the last user message  ->  inquiry
     POST {service}/overlays  ->  the overlay the quiz service rendered
-    that HTML, verbatim, with `Content-Disposition: inline`
+    that HTML, verbatim, on the `embeds` event
 
-Open WebUI displays what a function returns as an `HTMLResponse` in a sandboxed
-`srcdoc` iframe. From inside that iframe the overlay's own script `fetch`es the
+**The overlay is emitted, not returned** (#116). Open WebUI's Pipe path
+dispatches a return value on `str`, `dict`, `BaseModel`, `StreamingResponse`,
+`Iterator` and `AsyncGenerator`; an `HTMLResponse` matches none of them, so it
+fell through every branch and the learner got an empty message with nothing
+logged on either side. The `HTMLResponse` -> iframe rendering that the docs
+describe belongs to Tools and Actions, not to Pipes. What a Pipe *can* reach is
+`__event_emitter__`, and an `embeds` event renders verbatim as `srcdoc` in the
+same sandboxed frame — so the transport changes and nothing else does.
+
+From inside that iframe the overlay's own script `fetch`es the
 quiz service directly for every answer, probe and rating — measured in Chrome
 and Edge, and preflighted (`docs/research/open-webui-fit.md`). **None of that
 traffic passes through here.** The Pipe is called once, to start a quiz.
@@ -37,7 +45,6 @@ at all — see the README.
 import os
 from typing import Any
 
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 SERVICE_TOKEN_HEADER = "X-Socratic-Service-Token"
@@ -58,6 +65,17 @@ SERVICE_REFUSED = (
     "The quiz service could not author a quiz (HTTP {status}). Check that it "
     "is running and that this Pipe's service token matches its "
     "SOCRATIC_SERVICE_TOKEN."
+)
+
+NO_EMITTER = (
+    "This Open WebUI build handed the Pipe no event emitter, so the quiz has "
+    "nowhere to render. The overlay travels on an `embeds` event, not in what "
+    "the Pipe returns."
+)
+
+EMIT_REFUSED = (
+    "The quiz was authored, but the chat window would not accept the frame it "
+    "renders in."
 )
 
 SERVICE_UNREACHABLE = (
@@ -210,16 +228,34 @@ class Pipe:
         body: dict,
         __user__: dict | None = None,
         __metadata__: dict | None = None,
+        __event_emitter__: Any = None,
     ) -> Any:
         """One learner turn: a question in, an overlay out.
 
+        The overlay leaves on `__event_emitter__` as an `embeds` event, which
+        Open WebUI renders verbatim as `srcdoc` in a sandboxed iframe inline
+        in the message. It is deliberately not the return value: a Pipe's
+        return value cannot carry an iframe (#116).
+
+        Args:
+          body: Open WebUI's chat body; the last user message is the inquiry.
+          __user__: The authenticated learner, mapped to a `LearnerId`.
+          __metadata__: Names a `task` for the host's own housekeeping calls.
+          __event_emitter__: The host's event sink. Awaited once, with the
+            overlay.
+
         Returns:
-          An `HTMLResponse` carrying the overlay the quiz service rendered,
-          which Open WebUI displays in its sandboxed `srcdoc` iframe. On any
-          refusal, a plain string, which it renders as chat text instead.
+          The empty string on success — the quiz is in the frame, and
+          reprinting it as chat text is what ADR-0001 rules out. On any
+          refusal, a plain string, which Open WebUI renders as chat text.
         """
         if (__metadata__ or {}).get("task"):
             return TASK_ACKNOWLEDGED
+
+        if __event_emitter__ is None:
+            # Refused before the request: authoring spends a model call, and
+            # there is nowhere to put what it would return.
+            return NO_EMITTER
 
         try:
             learner_id = _learner_id(__user__)
@@ -253,8 +289,20 @@ class Pipe:
         # Verbatim. Everything in it was rendered and sanitised in the service
         # before it left (ADR-0012), and the Pipe holds no domain logic to
         # apply to it (acceptance 38).
-        return HTMLResponse(
-            content=reply.text,
-            media_type="text/html; charset=utf-8",
-            headers={"Content-Disposition": "inline"},
-        )
+        #
+        # `replace` because the host extends a message's existing embeds
+        # otherwise, and a re-run would stack a second quiz under the first.
+        try:
+            await __event_emitter__(
+                {
+                    "type": "embeds",
+                    "data": {"embeds": [reply.text], "replace": True},
+                }
+            )
+        except Exception:
+            # Broad and discarding, for the same reason the transport arm
+            # above is: this returns a chat message, and a chat message must
+            # not be able to print a credential.
+            return EMIT_REFUSED
+
+        return ""
