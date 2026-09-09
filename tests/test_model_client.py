@@ -13,6 +13,7 @@ visible in the type (CONTEXT: Call type).
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 
 import pytest
@@ -24,6 +25,7 @@ from socratic.domain.model_client import (
     NeverCalled,
     RecordingModelClient,
 )
+from socratic.domain import records
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.prompting import CallType, LearnerProfile, assemble
 
@@ -210,7 +212,65 @@ class TestModelResponse:
         assert response.cache_read_input_tokens == 0
         assert response.cache_creation_input_tokens == 0
 
+    def test_the_plain_counters_default_to_zero(self):
+        # Additive with defaults so every existing construction — the stub's
+        # canned response included — keeps working untouched (#33).
+        response = ModelResponse(content="{}", message_id="msg_abc")
+        assert response.input_tokens == 0
+        assert response.output_tokens == 0
+
+    def test_it_carries_all_four_counters(self):
+        response = ModelResponse(
+            content="{}",
+            message_id="msg_abc",
+            input_tokens=1200,
+            output_tokens=340,
+            cache_read_input_tokens=900,
+            cache_creation_input_tokens=64,
+        )
+        assert response.input_tokens == 1200
+        assert response.output_tokens == 340
+        assert response.cache_read_input_tokens == 900
+        assert response.cache_creation_input_tokens == 64
+
+    def test_the_existing_fields_keep_their_positions(self):
+        # #32 and #35 both build `ModelResponse` on unmerged branches; the new
+        # fields go on the end so a positional or keyword construction written
+        # against `main` today still means the same thing after a rebase.
+        names = [field.name for field in dataclasses.fields(ModelResponse)]
+        assert names[:4] == [
+            "content",
+            "message_id",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ]
+
     def test_it_is_frozen(self):
         response = ModelResponse(content="{}", message_id="msg_abc")
         with pytest.raises(Exception):
             response.content = "other"  # type: ignore[misc]
+
+
+class TestTokenUsageMapping:
+    def test_it_maps_all_four_counters_onto_a_token_usage(self):
+        # #33: without this the caller has to reassemble four loose counters,
+        # and `QuizAuthoring` was inventing two of them as zeros.
+        response = ModelResponse(
+            content="{}",
+            message_id="msg_abc",
+            input_tokens=1200,
+            output_tokens=340,
+            cache_read_input_tokens=900,
+            cache_creation_input_tokens=64,
+        )
+        assert response.token_usage() == records.TokenUsage(
+            input_tokens=1200,
+            output_tokens=340,
+            cache_creation_input_tokens=64,
+            cache_read_input_tokens=900,
+        )
+
+    def test_an_unpopulated_response_maps_to_all_zeros(self):
+        assert ModelResponse(
+            content="{}", message_id="msg_abc"
+        ).token_usage() == records.TokenUsage(input_tokens=0, output_tokens=0)

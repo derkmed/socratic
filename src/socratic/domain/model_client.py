@@ -26,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence, runtime_checkable
 
+from socratic.domain import records
 from socratic.domain.prompting import CallType, PromptSegments
 
 
@@ -46,12 +47,39 @@ class ModelResponse:
     proves each segment 1 cleared the model's minimum cacheable prefix
     (ADR-0014, master spec acceptance 12). Falling under that floor is silent,
     so the counter is the only symptom short of the bill.
+
+    `input_tokens` and `output_tokens` complete the set. All four together are
+    the audit link back to the exact API calls behind a stored quiz, and a
+    caller holding only the two cache counters has to invent the other two —
+    which is how the first caller came to stamp every attempt with `0` input
+    and `0` output. The counters stay loose here rather than becoming a single
+    `TokenUsage` field: this is the port's value type and `TokenUsage` is the
+    persisted one, so `token_usage()` is the one place the two meet.
+
+    Every counter defaults to zero, so a response that does not know its usage
+    — the recording stub's canned reply — still constructs.
     """
 
     content: str
     message_id: str
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def token_usage(self) -> records.TokenUsage:
+        """The four counters in the shape that gets persisted.
+
+        Callers stamping a `records.ModelCallRecord` onto an attempt go through
+        here rather than reassembling the counters by hand, so there is exactly
+        one mapping to get wrong and it has a test.
+        """
+        return records.TokenUsage(
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens,
+        )
 
 
 @runtime_checkable
