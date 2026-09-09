@@ -111,6 +111,67 @@ class TestBlanks:
         assert sanitiser.sanitise(out) == out
 
 
+class TestABlankIsAGapInASentence:
+    """Issue #86.
+
+    A text segment either side of a blank is a fragment of a sentence, so the
+    three of them must render as one flowing line — no block wrapper, and the
+    spaces that hold the words apart from the blank still there. Before this,
+    each text segment was its own `<p>` and the overlay's stylesheet flattened
+    them presentationally, at the cost of a real paragraph break inside one
+    segment.
+    """
+
+    SENTENCE = (
+        types.TextSegment("Heat flows because "),
+        types.BlankSegment("b1"),
+        types.TextSegment(" rises."),
+    )
+
+    def test_the_sentence_carries_no_paragraph_wrapper(self):
+        assert "<p>" not in content.render_explanation(self.SENTENCE)
+
+    def test_the_words_keep_their_distance_from_the_blank(self):
+        out = content.render_explanation(self.SENTENCE)
+        assert out.startswith("Heat flows because <span")
+        assert out.endswith("</span> rises.")
+
+    def test_the_rendered_text_reads_as_one_line(self):
+        assert _text_of(content.render_explanation(self.SENTENCE)) == (
+            "Heat flows because  rises."
+        )
+
+    def test_two_adjacent_blanks_stay_apart(self):
+        out = content.render_explanation(
+            (
+                types.BlankSegment("b1"),
+                types.TextSegment(" "),
+                types.BlankSegment("b2"),
+            )
+        )
+        assert "</span> <span" in out
+
+    def test_a_segment_that_is_block_content_keeps_its_blocks(self):
+        # The fenced block and the list are not clauses; flattening them was
+        # never the point.
+        out = content.render_explanation(
+            (
+                types.TextSegment("Consider:\n\n```python\nx = 1\n```"),
+                types.TextSegment("- one\n- two\n"),
+            )
+        )
+        assert "<pre" in out
+        assert "<li>one</li>" in out
+        assert "<p>Consider:</p>" in out
+
+    def test_a_paragraph_break_inside_one_segment_survives(self):
+        # What the CSS workaround could not preserve.
+        out = content.render_explanation(
+            (types.TextSegment("first\n\nsecond"),)
+        )
+        assert out.count("<p>") == 2
+
+
 class TestAResolvedFormula:
     """Master acceptance 32."""
 
@@ -181,7 +242,8 @@ class TestSanitisationOfTheWholeDocument:
         # The words survive as text — that is what "inert" means here, and it
         # is the honest outcome: the learner sees what the model wrote, the
         # browser executes none of it.
-        assert _tag_names(out) == {"p", "math", "mo"}, out
+        # No `p`: the text segment is one clause and renders inline (#86).
+        assert _tag_names(out) == {"math", "mo"}, out
         assert _attribute_names(out) == set(), out
         assert "&lt;script&gt;" in out
         assert "annotation" not in out

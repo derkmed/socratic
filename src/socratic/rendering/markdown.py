@@ -98,6 +98,46 @@ def render_markdown(text: str) -> str:
     return sanitiser.sanitise(_PARSER.render(text))
 
 
+_ONE_PARAGRAPH = ("paragraph_open", "inline", "paragraph_close")
+"""The block token stream of a text that is a single flowing paragraph.
+
+An empty stream — whitespace only, or nothing — counts as well: it is a text
+with no block content at all, which is the other case that must flow.
+"""
+
+
+def render_fragment(text: str) -> str:
+    """Render one `text` segment of an explanation.
+
+    A text segment is usually a **fragment of a sentence** with a blank on one
+    or both sides (ADR-0004), so `render_markdown` is the wrong render for it:
+    it wraps the fragment in a block `<p>` and drops the leading and trailing
+    spaces, and the explanation reads as a stack of blocks rather than as a
+    sentence with holes in it.
+
+    So a segment the parser sees as **at most one paragraph and nothing else**
+    is rendered inline — no wrapper, whitespace intact — and everything else is
+    rendered exactly as `render_markdown` renders it. A fenced code block or a
+    list is not a clause; it is a block, and it keeps its block layout.
+
+    The parser makes that call from its own block token stream rather than a
+    regex guessing at block markers, and both paths share one parser, so the
+    restricted subset, the escaping of raw HTML and the sanitiser pass are the
+    same either way.
+
+    Args:
+      text: Model-authored Markdown. Untrusted.
+
+    Returns:
+      HTML containing only the subset's elements, already through
+      `sanitiser.sanitise`. No `<p>` unless the text asked for one.
+    """
+    tokens = tuple(token.type for token in _PARSER.parse(text, {}))
+    if tokens and tokens != _ONE_PARAGRAPH:
+        return render_markdown(text)
+    return sanitiser.sanitise(_PARSER.renderInline(text))
+
+
 def highlight_css() -> str:
     """The Pygments colour definitions, for inlining into the iframe.
 

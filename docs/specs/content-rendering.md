@@ -66,6 +66,12 @@ built in this order. Each is red-green-refactored before the next begins.
    to `render_markdown`, `MathSegment` to `sanitise`, `BlankSegment` to a
    constant placeholder element carrying the blank id.
 
+   *Amended by [inline-text-segments](inline-text-segments.md) (#86):* a
+   `TextSegment` goes to `markdown.render_fragment`, not `render_markdown`. A
+   segment that is a clause renders inline, with no `<p>` and its outer spaces
+   intact, so a blank reads as a gap in a sentence; a segment that carries
+   block content still renders exactly as `render_markdown` renders it.
+
 `pyproject.toml` gains a **`rendering` optional extra**, not base dependencies.
 This is forced, not chosen: `tests/test_import_hygiene.py::test_the_package_has_no_base_dependencies`
 asserts `project.dependencies == []`, and that test is not ours to edit. It is

@@ -60,7 +60,11 @@ def render_segment(segment: types.Segment) -> str:
         dropping it silently would render an explanation with a hole in it.
     """
     if isinstance(segment, types.TextSegment):
-        return markdown.render_markdown(segment.text)
+        # `render_fragment`, not `render_markdown`: a text segment is a
+        # fragment of a sentence with a blank beside it, and a block `<p>`
+        # around it turns the blank into a paragraph break (issue #86). A
+        # segment that really is block content still gets its blocks.
+        return markdown.render_fragment(segment.text)
     if isinstance(segment, types.MathSegment):
         # Sanitised even though `mathml.latex_to_mathml` already did: the
         # field is a plain string on a domain dataclass, and the renderer

@@ -114,12 +114,15 @@ asks; the control is under it rather than in it. When a blank resolves the
 client fills its gap, so a finished quiz reads as a complete sentence rather
 than as a page of holes.
 
-The same block-level wrapping is why the overlay's stylesheet flows the
-explanation's direct-child paragraphs inline: `render_markdown` wraps every text
-segment in its own `<p>`, so left alone each blank would read as a paragraph
-break rather than as a gap in a sentence. The cost is that a paragraph break
-*inside* one text segment flattens too — a presentational workaround for
-something better fixed in the content renderer, filed separately.
+The stylesheet used to flow the explanation's direct-child paragraphs inline,
+for the same reason: `render_markdown` wrapped every text segment in its own
+`<p>`, so left alone each blank read as a paragraph break rather than as a gap
+in a sentence. That workaround is **gone** (#86,
+[inline-text-segments](inline-text-segments.md)). The renderer now sends a text
+segment through `markdown.render_fragment`, which emits no `<p>` for a segment
+that is a clause, so the paragraphs that reach the stylesheet are ones an author
+wrote — including a real break inside a single text segment, which the
+presentational rule used to flatten along with the artificial ones.
 
 `render_direct_answer(body)` renders the override branch (ADR-0004) as the same
 chrome with the prose and no client script: there is no session, no token and

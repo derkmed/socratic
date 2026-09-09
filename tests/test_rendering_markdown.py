@@ -160,6 +160,76 @@ class TestRawHtmlAndInjection:
         assert sanitiser.sanitise(out) == out
 
 
+class TestAFragmentIsAClauseUnlessItIsNot:
+    """`render_fragment` — the text-segment render (issue #86).
+
+    A text segment is usually a fragment of a sentence with a blank on one or
+    both sides, so it must not become a `<p>`, and it must keep the spaces
+    that hold it apart from the blank. A segment that carries genuine block
+    content is a block, and renders exactly as `render_markdown` renders it.
+    """
+
+    def test_a_clause_gets_no_paragraph_wrapper(self):
+        assert markdown.render_fragment("Heat rises") == "Heat rises"
+
+    def test_a_clause_keeps_the_space_that_precedes_the_next_blank(self):
+        assert markdown.render_fragment("Heat flows because ") == (
+            "Heat flows because "
+        )
+
+    def test_a_clause_keeps_the_space_that_follows_the_previous_blank(self):
+        assert markdown.render_fragment(" rises.") == " rises."
+
+    def test_a_whitespace_only_segment_survives_as_a_gap(self):
+        # The separator between two adjacent blanks. Block-rendered it is the
+        # empty string, which fuses the two blanks into one.
+        assert markdown.render_fragment(" ") == " "
+
+    def test_an_empty_segment_renders_to_nothing(self):
+        assert markdown.render_fragment("") == ""
+
+    def test_the_inline_subset_still_renders(self):
+        out = markdown.render_fragment("a **bold** and `code` bit")
+        assert out == "a <strong>bold</strong> and <code>code</code> bit"
+
+    def test_a_fenced_block_renders_as_a_block(self):
+        source = "```python\ndef f():\n    return 1\n```"
+        out = markdown.render_fragment(source)
+        assert out == markdown.render_markdown(source)
+        assert "<pre" in out
+        assert 'class="language-python"' in out
+
+    def test_a_list_renders_as_a_block(self):
+        source = "- one\n- two\n"
+        out = markdown.render_fragment(source)
+        assert out == markdown.render_markdown(source)
+        assert "<li>one</li>" in out
+
+    def test_two_paragraphs_stay_two_paragraphs(self):
+        # The thing the CSS workaround could not preserve: a real paragraph
+        # break *inside* one text segment.
+        source = "first paragraph\n\nsecond paragraph"
+        out = markdown.render_fragment(source)
+        assert out == markdown.render_markdown(source)
+        assert out.count("<p>") == 2
+
+    def test_a_soft_line_break_is_still_one_clause(self):
+        assert markdown.render_fragment("a\nb") == "a\nb"
+
+    def test_raw_html_in_a_clause_is_escaped(self):
+        out = markdown.render_fragment("<script>alert(1)</script>")
+        assert "<script" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_a_javascript_href_does_not_survive_a_clause(self):
+        out = markdown.render_fragment("[click](javascript:alert(1))")
+        assert "<a" not in out
+
+    def test_a_clause_is_sanitised(self):
+        out = markdown.render_fragment("an *emphasised* clause")
+        assert out == sanitiser.sanitise(out)
+
+
 class TestHighlightingNeedsNoNetwork:
     def test_rendering_opens_no_connection(self, no_network):
         out = markdown.render_markdown("```python\nimport os\n```")
