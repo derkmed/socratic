@@ -84,7 +84,11 @@ docker compose --project-directory <path-to-checkout> up -d --force-recreate
 The Pipe is pasted, not installed — it runs inside the Open WebUI container,
 which does not have this package.
 
-1. Open WebUI → **Workspace → Functions → +**.
+1. Open WebUI → **Bottom Left User Bubble → Admin Panel → Functions →
+   Create**, which is `/admin/functions`. Functions used to sit under Workspace
+   and older guides still say so; as of 0.11.3 the Workspace tabs are Models,
+   Knowledge, Prompts, Skills and Tools. The page is admin-only — a
+   non-admin account is redirected away rather than shown an empty list.
 2. Paste the whole of `pipe/socratic_pipe.py`, save, and enable it.
 3. Check its **Valves**. They default from the environment `compose.yaml`
    already sets, so on a default `docker compose up` there is nothing to
