@@ -40,6 +40,7 @@ def build_app():
             ratings=InMemoryRatingRepository(),
             minter=TokenMinter(config.token_secret, ttl_millis=config.ttl_millis),
             service_token=config.service_token,
+            public_base_url=config.public_base_url,
         )
     )
 
