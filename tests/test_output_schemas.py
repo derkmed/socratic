@@ -40,6 +40,7 @@ from socratic.domain import prompting
 from socratic.domain import registry as registry_module
 from socratic.domain import session
 from socratic.domain.ids import new_quiz_session_id
+from socratic.domain.modes import ProbeCadence
 from socratic.domain.records import Verdict
 from socratic.domain.types import Blank, BlankSegment, Quiz
 
@@ -379,3 +380,105 @@ class TestGradeProbe:
         assert session._parse_probe_grading(
             json.dumps({"verdict": "incorrect", "correction": None})
         ) == (Verdict.INCORRECT, None)
+
+
+def _a_quiz(mode="novice"):
+    """One minimal quiz, for the call types that render an existing one."""
+    return Quiz(
+        quiz_session_id=new_quiz_session_id(),
+        mode=mode,
+        topic="topic",
+        explanation=(BlankSegment("b1"),),
+        blanks=(Blank(blank_id="b1", mode=mode),),
+        recap="",
+    )
+
+
+class TestTheSchemaFollowsTheModeTheCallIsFor:
+    """#114. The schema *is* the contract.
+
+    Segment 1 tells the model "structured output against a schema supplied with
+    the request", and nothing anywhere names the difficulty mode in prose — so
+    the only thing that makes an Advanced call produce Advanced blanks is the
+    schema it is sent with. Sent the mode-agnostic union instead, the model may
+    pick either branch, and Advanced validation refuses everything the Novice
+    branch admits.
+
+    `for_segments` is the selection, and it lives here rather than in the
+    adapter for the reason the module docstring gives: a schema is a statement
+    about what the domain parses, and this half of the suite runs without the
+    SDK installed.
+    """
+
+    def _authoring(self, call_type, mode):
+        return prompting.assemble(
+            call_type,
+            profile=prompting.LearnerProfile(learner_id="L"),
+            probe_cadence=ProbeCadence.SOMETIMES,
+            inquiry="How does an LRU cache work?",
+            quiz=_a_quiz() if call_type is prompting.CallType.AUTHOR_PEDAGOGY else None,
+            blank_range=registry_module.BlankRange(4, 6),
+            mode=mode,
+        )
+
+    def test_an_advanced_skeleton_asks_for_a_rubric_and_forbids_options(self):
+        schema = output_schemas.for_segments(
+            self._authoring(prompting.CallType.AUTHOR_SKELETON, "advanced")
+        )
+
+        blanks = _blank_items(schema)
+        assert blanks, "the envelope declares no blanks array"
+        for blank in blanks:
+            assert set(blank["required"]) == {"blank_id", "rubric"}
+            assert "options" not in blank["properties"]
+            assert "correct_option_id" not in blank["properties"]
+
+    def test_a_novice_skeleton_asks_for_an_option_bank(self):
+        schema = output_schemas.for_segments(
+            self._authoring(prompting.CallType.AUTHOR_SKELETON, "novice")
+        )
+
+        blanks = _blank_items(schema)
+        assert blanks
+        for blank in blanks:
+            assert "options" in blank["properties"]
+            assert "correct_option_id" in blank["properties"]
+
+    def test_neither_mode_is_sent_the_other_modes_shape(self):
+        """The union is what #114 was: both branches offered, either accepted."""
+        novice = _blank_items(
+            output_schemas.for_segments(
+                self._authoring(prompting.CallType.AUTHOR_SKELETON, "novice")
+            )
+        )
+        advanced = _blank_items(
+            output_schemas.for_segments(
+                self._authoring(prompting.CallType.AUTHOR_SKELETON, "advanced")
+            )
+        )
+
+        assert novice != advanced
+        assert len(novice) == 1, "a mode-bound call offers exactly one blank shape"
+        assert len(advanced) == 1
+
+    def test_an_authoring_call_with_no_mode_is_refused(self):
+        """Silence here is the bug returning: an authoring call that forgot its
+        mode would fall back to the union and be judged by one mode's rules."""
+        segments = self._authoring(prompting.CallType.AUTHOR_SKELETON, None)
+
+        with pytest.raises(ValueError, match="mode"):
+            output_schemas.for_segments(segments)
+
+    def test_a_mode_invariant_call_needs_no_mode(self):
+        """`grade_answer`, `grade_probe` and `fold_narrative` do not vary by
+        mode, so they are not made to carry one."""
+        segments = prompting.assemble(
+            prompting.CallType.GRADE_ANSWER,
+            profile=prompting.LearnerProfile(learner_id="L"),
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_a_quiz(),
+            current_blank_id="b1",
+            current_guess="entropy",
+        )
+
+        assert output_schemas.for_segments(segments) == output_schemas.GRADE_ANSWER

@@ -106,13 +106,19 @@ then every one of the four disagreed with what the domain actually parses.
 Nothing failed, because every test runs against `RecordingModelClient`, which
 serves canned content and never looks at a schema.
 
-`output_schemas.for_mode` is the single composition point, and it lives in the
-domain because that is the direction the dependency runs: the domain may not
-import the adapter, and a schema is a statement about what the domain parses -
-this module only carries it to the wire. The default is the mode-agnostic
-composition, which admits every mode the registry holds; a caller that knows
-which mode it is authoring for passes `schemas=output_schemas.for_mode(mode)`
-through the constructor argument that has existed for this since #7."""
+`output_schemas` is the single composition point, and it lives in the domain
+because that is the direction the dependency runs: the domain may not import
+the adapter, and a schema is a statement about what the domain parses - this
+module only carries it to the wire.
+
+**This constant is the fallback for `build_request` alone, not what the client
+sends.** It is the mode-agnostic composition, which admits every mode the
+registry holds - and admitting every mode is precisely what #114 was: an
+Advanced call could satisfy the union with novice-shaped blanks, which the
+Advanced validator then refused, so every Advanced quiz 422'd. The client picks
+per call instead, through `output_schemas.for_segments`, from the mode the
+assembled segments carry. `schemas=` on the constructor stays what it has been
+since #7 - an override for a caller that composed its own shapes."""
 
 
 def _block(segment: prompting.PromptSegment) -> dict[str, Any]:
@@ -193,14 +199,17 @@ class AnthropicModelClient:
             `anthropic.Anthropic()` is constructed, which resolves credentials
             from the environment and will make paid calls.
           valves: Admin settings (model, per-call-type effort, `max_tokens`).
-          schemas: Output schemas by call type, overriding the provisional
-            defaults.
+          schemas: Output schemas by call type, overriding what the domain
+            would select for each call. Omitted - the usual case - every call
+            is sent the schema `output_schemas.for_segments` picks for it.
         """
         self._client = client if client is not None else anthropic.Anthropic()
         self._valves = valves or Valves()
-        self._schemas = dict(DEFAULT_OUTPUT_SCHEMAS)
-        if schemas:
-            self._schemas.update(schemas)
+        # An *override*, not the source. Left empty, each call is sent the
+        # schema its own assembled segments select, which is the only way the
+        # two authoring calls get the mode's blank shape rather than the union
+        # of every registered mode's (#114).
+        self._schemas = dict(schemas or {})
 
     @property
     def valves(self) -> Valves:
@@ -235,6 +244,20 @@ class AnthropicModelClient:
 
     # --- Internals -----------------------------------------------------------
 
+    def _schema_for(self, segments: prompting.PromptSegments) -> Mapping[str, Any]:
+        """The schema this call goes out with.
+
+        A constructor override wins where one was given, so a caller that has
+        already composed its own shapes keeps them. Otherwise the domain
+        chooses, from the call type and the mode the segments carry: the
+        composition point is `output_schemas.for_segments`, and it lives in the
+        domain because a schema is a statement about what the domain parses.
+        """
+        override = self._schemas.get(segments.call_type)
+        if override is not None:
+            return override
+        return output_schemas.for_segments(segments)
+
     def _send(
         self,
         call_type: prompting.CallType,
@@ -246,7 +269,7 @@ class AnthropicModelClient:
                 f"{segments.call_type.value}"
             )
         request = build_request(
-            segments, valves=self._valves, schema=self._schemas[call_type]
+            segments, valves=self._valves, schema=self._schema_for(segments)
         )
         return _to_model_response(self._client.messages.create(**request))
 

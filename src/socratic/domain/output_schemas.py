@@ -258,3 +258,54 @@ def for_mode(
         CallType.GRADE_PROBE: dict(GRADE_PROBE),
         CallType.FOLD_NARRATIVE: dict(FOLD_NARRATIVE),
     }
+MODE_BOUND_CALLS: frozenset[CallType] = frozenset(
+    {CallType.AUTHOR_SKELETON, CallType.AUTHOR_PEDAGOGY}
+)
+"""The call types whose schema depends on the mode being authored for.
+
+The other three are composed here precisely because they do not vary
+(`GRADE_ANSWER`, `GRADE_PROBE`, `FOLD_NARRATIVE` above), so they are not made
+to carry a mode they would ignore."""
+
+
+def for_segments(
+    segments: prompting.PromptSegments,
+    *,
+    registry: registry_module.ModeRegistry | None = None,
+) -> Schema:
+    """The schema one assembled call should be sent with.
+
+    The schema is the contract. Segment 1 tells the model it is producing
+    "structured output against a schema supplied with the request", and no
+    prompt anywhere names the difficulty mode in prose - so for the two
+    authoring calls, the schema is the *only* thing that makes an Advanced call
+    produce Advanced blanks. Sent `for_mode()`'s mode-agnostic union instead,
+    the model may satisfy it from either branch, and the mode's own validator
+    then refuses everything the other branch admits. That was #114: every
+    Advanced quiz came back novice-shaped and 422'd.
+
+    Args:
+      segments: The assembled call, which carries both its `call_type` and -
+        for the two that vary - the `mode` it is for.
+      registry: Where the per-mode fragments come from. Defaults to
+        `default_registry()`.
+
+    Returns:
+      One schema, fresh, for `segments.call_type`.
+
+    Raises:
+      ValueError: If an authoring call carries no mode. Refused rather than
+        defaulted, because the default that would apply is exactly the union
+        this function exists to stop being sent.
+      KeyError: If no policy is registered for the mode.
+    """
+    call_type = segments.call_type
+    if call_type not in MODE_BOUND_CALLS:
+        return for_mode(registry=registry)[call_type]
+
+    if segments.mode is None:
+        raise ValueError(
+            f"{call_type.value} carries no mode, so there is no blank shape "
+            "to ask the model for"
+        )
+    return for_mode(segments.mode, registry=registry)[call_type]
