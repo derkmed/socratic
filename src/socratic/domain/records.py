@@ -21,6 +21,11 @@ replay it (ADR-0009).
 and 2 probes per blank, so at most 80 guesses and 40 probes. Unbounded document
 growth is the shape that kills document stores, so every construction checks -
 and since every write goes through a record, construction *is* write time.
+
+**The learner profile is not one of these records.** It is a rewritten-in-place
+aggregate rather than an immutable event, and the assembler needs it too, so it
+lives in `socratic.domain.profiles` - a leaf neither this module nor
+`prompting.py` has to import through the other (D8, ADR-0008; #36).
 """
 
 from __future__ import annotations
@@ -300,20 +305,3 @@ class RatingRecord:
     def __post_init__(self) -> None:
         if not 1 <= self.score <= 5:
             raise ValueError(f"a Likert score runs 1-5, got {self.score}")
-
-
-@dataclass(frozen=True, slots=True)
-class LearnerProfile:
-    """The minimum a `LearnerProfileRepository` needs to round-trip.
-
-    D8's full composition - the exactly-recomputed ledger plus the folded
-    narrative - belongs to the profile ticket. What is fixed here is only what
-    persistence needs: whose profile it is, the prose the assembler renders, and
-    the watermark saying how far `ProfileBuilder` has read. The domain never
-    reads the narrative's internals, so its shape stays free to change.
-    """
-
-    learner_id: str
-    narrative: str = ""
-    watermark: str | None = None
-    updated_at: datetime | None = None
