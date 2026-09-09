@@ -14,6 +14,7 @@ the same assertion that guards `assemble` catches it.
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 import re
 
@@ -396,6 +397,32 @@ class TestSegmentTwo:
             CallType.AUTHOR_SKELETON, profile=BASHO, probe_cadence=ProbeCadence.OFF
         ).segment_2.text
         assert prompting.render_profile(BASHO) in text
+
+    def test_a_mode_key_that_is_not_an_enum_member_still_renders(self):
+        """#89: `ModeKey` is `str`, and `_render_quiz` read `quiz.mode.value`.
+        A registry may hold a plain string key — `tests/test_registry.py`
+        registers `"expert"` — so `.value` is an unsafe read here whatever the
+        authoring path stores."""
+        quiz = dataclasses.replace(_quiz(), mode="expert")
+
+        text = prompting.assemble(
+            CallType.AUTHOR_PEDAGOGY,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=quiz,
+        ).segment_2.text
+
+        assert "Mode: expert" in text
+
+    def test_a_registered_member_renders_as_its_stored_spelling(self):
+        text = prompting.assemble(
+            CallType.AUTHOR_PEDAGOGY,
+            profile=ADA,
+            probe_cadence=ProbeCadence.SOMETIMES,
+            quiz=_novice_quiz(),
+        ).segment_2.text
+
+        assert "Mode: novice" in text
 
     def test_novice_option_banks_reach_segment_two(self):
         text = prompting.assemble(

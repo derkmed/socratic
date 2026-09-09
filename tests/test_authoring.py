@@ -1057,3 +1057,50 @@ def _a_guess(attempt):
         created_at=attempt.created_at,
         graded_by=GradingStrategy.DETERMINISTIC,
     )
+
+
+class TestTheModeIsNormalisedOnTheWayIn:
+    """Issue #89 (and #85): the mode arrives over HTTP as the plain string the
+    request named — `LearnerSettings` carries it verbatim on purpose — and
+    `Quiz.mode` is annotated `DifficultyMode`. Until the registry canonicalised
+    it here, every quiz authored through the service held a `str`, and the
+    first prompt assembled for that quiz died on `quiz.mode.value`."""
+
+    def test_a_bare_string_mode_is_stored_as_the_registered_key(self):
+        service, _, _ = build_both(skeleton_payload(), pedagogy_payload())
+
+        quiz = service.author("Why does heat flow?", LEARNER, mode="novice")
+
+        assert quiz.mode is DifficultyMode.NOVICE
+
+    def test_the_blanks_carry_the_registered_key_too(self):
+        service, _, _ = build_both(skeleton_payload(), pedagogy_payload())
+
+        quiz = service.author("Why does heat flow?", LEARNER, mode="novice")
+
+        assert [blank.mode for blank in quiz.blanks] == [DifficultyMode.NOVICE]
+        assert all(blank.mode is DifficultyMode.NOVICE for blank in quiz.blanks)
+
+    def test_the_stored_attempt_carries_it_as_well(self):
+        service, _, attempts = build_both(skeleton_payload(), pedagogy_payload())
+
+        service.author("Why does heat flow?", LEARNER, mode="novice")
+
+        attempt = attempts.list_for_learner(LEARNER)[0]
+        assert attempt.mode is DifficultyMode.NOVICE
+
+    def test_the_pedagogy_call_lands_for_a_quiz_authored_from_a_string(self):
+        # The reported symptom (#89): the second authoring call assembles a
+        # prompt from the quiz, and the quiz's mode was a `str`.
+        _, attempt, _, _ = author_both(mode="novice")
+
+        assert attempt.quiz.blanks[0].hints is not None
+        assert attempt.quiz.recap == "Entropy never decreases in an isolated system."
+
+    def test_an_unregistered_mode_is_still_refused_before_the_model(self):
+        service, client, _ = build_both(skeleton_payload(), pedagogy_payload())
+
+        with pytest.raises(KeyError, match="expert"):
+            service.author("Why does heat flow?", LEARNER, mode="expert")
+
+        client.assert_never_called()

@@ -48,7 +48,7 @@ from typing import Mapping, Sequence
 
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.profiles import LearnerProfile
-from socratic.domain.registry import BlankRange
+from socratic.domain.registry import BlankRange, mode_name
 from socratic.domain.types import (
     BlankSegment,
     MathSegment,
@@ -301,7 +301,7 @@ def _render_quiz(quiz: Quiz) -> str:
     """
     lines = [
         f"Session: {quiz.quiz_session_id}",
-        f"Mode: {quiz.mode.value}",
+        f"Mode: {mode_name(quiz.mode)}",
         f"Topic: {quiz.topic}",
         "Explanation:",
         f"  {_render_explanation(quiz.explanation)}",
