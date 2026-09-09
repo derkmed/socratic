@@ -11,12 +11,15 @@ Two bounds, two independent rejections (acceptance 25): the mode's
 on its own even when a mode's range would admit the count.
 """
 
+import dataclasses
+
 import pytest
 
 from socratic.domain import validation
 from socratic.domain.ids import new_quiz_session_id
 from socratic.domain.modes import DifficultyMode
 from socratic.domain.registry import (
+    AuthoringStage,
     BlankRange,
     ModePolicy,
     ModeRegistry,
@@ -255,3 +258,107 @@ class TestModeAgreement:
     def test_a_quiz_in_an_unregistered_mode_is_an_error(self):
         with pytest.raises(KeyError):
             validation.validate_quiz(_novice_quiz(), ModeRegistry())
+
+
+class TestValidatingAtAStage(object):
+    """Issue #9. Authoring is two calls, so "valid" needs to say *when*.
+
+    `stage` defaults to `COMPLETE`, which is what every test above means and
+    what every caller that has never heard of the split already meant.
+    """
+
+    def _skeleton_novice_quiz(self, count: int = 2) -> Quiz:
+        return _novice_quiz(count, reinforcement=None, hints=None)
+
+    def test_a_skeleton_only_novice_quiz_is_valid_at_the_skeleton_stage(self):
+        # The thing PR #32 reported as impossible.
+        assert (
+            validation.validate_quiz(
+                self._skeleton_novice_quiz(),
+                default_registry(),
+                stage=AuthoringStage.SKELETON,
+            )
+            == ()
+        )
+
+    def test_the_same_quiz_is_invalid_at_the_complete_stage(self):
+        errors = validation.validate_quiz(
+            self._skeleton_novice_quiz(), default_registry()
+        )
+        assert any("hint" in error for error in errors)
+        assert any("reinforcement" in error for error in errors)
+
+    def test_complete_is_the_default_stage(self):
+        assert validation.validate_quiz(
+            self._skeleton_novice_quiz(), default_registry()
+        ) == validation.validate_quiz(
+            self._skeleton_novice_quiz(),
+            default_registry(),
+            stage=AuthoringStage.COMPLETE,
+        )
+
+    def test_the_conditional_rules_still_bite_at_the_skeleton_stage(self):
+        # Relaxed is not disabled: the option bank is a skeleton field.
+        errors = validation.validate_quiz(
+            _novice_quiz(options=(Option("o1", "entropy"),), hints=None),
+            default_registry(),
+            stage=AuthoringStage.SKELETON,
+        )
+        assert any("option" in error for error in errors)
+
+    def test_an_advanced_skeleton_still_needs_its_rubric(self):
+        errors = validation.validate_quiz(
+            _advanced_quiz(rubric=None),
+            default_registry(),
+            stage=AuthoringStage.SKELETON,
+        )
+        assert any("rubric" in error for error in errors)
+
+    def test_the_blank_range_binds_at_every_stage(self):
+        # The skeleton declares every blank, so the pedagogical bound is
+        # knowable from it alone.
+        for stage in AuthoringStage:
+            errors = validation.validate_quiz(
+                self._skeleton_novice_quiz(count=3),
+                default_registry(),
+                stage=stage,
+            )
+            assert any("blank_range" in error for error in errors)
+
+    def test_a_completed_quiz_needs_a_recap(self):
+        # The recap is the only pedagogy an Advanced quiz has, so without this
+        # an empty payload would merge and be called complete.
+        quiz = dataclasses.replace(_advanced_quiz(), recap="   ")
+        assert any(
+            "recap" in error
+            for error in validation.validate_quiz(quiz, default_registry())
+        )
+
+    def test_a_skeleton_needs_no_recap(self):
+        quiz = dataclasses.replace(self._skeleton_novice_quiz(), recap="")
+        assert (
+            validation.validate_quiz(
+                quiz, default_registry(), stage=AuthoringStage.SKELETON
+            )
+            == ()
+        )
+
+    def test_ensure_valid_quiz_takes_the_same_stage(self):
+        quiz = self._skeleton_novice_quiz()
+        assert (
+            validation.ensure_valid_quiz(
+                quiz, default_registry(), stage=AuthoringStage.SKELETON
+            )
+            is quiz
+        )
+        with pytest.raises(validation.QuizValidationError):
+            validation.ensure_valid_quiz(quiz, default_registry())
+
+    def test_a_mode_that_declares_no_stage_rules_is_validated_as_complete(self):
+        # `_wide_registry`'s expert policy carries the six fields and nothing
+        # else, so every stage is its complete validator.
+        for stage in AuthoringStage:
+            assert (
+                validation.validate_quiz(_expert_quiz(20), _wide_registry(), stage=stage)
+                == ()
+            )
