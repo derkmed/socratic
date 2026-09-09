@@ -112,11 +112,14 @@ def _attempt(
     outcome: Outcome = Outcome.RESOLVED,
 ) -> QuizAttempt:
     """One attempt. Sealed by default — an unsealed one is the barrier case."""
+    # The attempt and its quiz name one session, so the quiz's own id is what
+    # goes on the record rather than a second minted one.
+    quiz = _quiz()
     attempt = QuizAttempt(
         attempt_id=attempt_id or str(Ulid.mint()),
         learner_id=learner_id,
-        session_id=str(Ulid.mint()),
-        quiz=_quiz(),
+        session_id=quiz.quiz_session_id,
+        quiz=quiz,
         mode=mode,
         topic=topic,
         created_at=AT,

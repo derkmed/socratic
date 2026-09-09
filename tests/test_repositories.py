@@ -58,11 +58,14 @@ def _quiz() -> Quiz:
 
 
 def _attempt(learner_id: str = "learner-1", **overrides) -> QuizAttempt:
+    # The attempt and its quiz name one session, so the quiz's own id is what
+    # goes on the record rather than a second minted one.
+    quiz = overrides.pop("quiz", None) or _quiz()
     fields = dict(
         attempt_id=str(Ulid.mint()),
         learner_id=learner_id,
-        session_id=str(Ulid.mint()),
-        quiz=_quiz(),
+        session_id=quiz.quiz_session_id,
+        quiz=quiz,
         mode=DifficultyMode.NOVICE,
         topic="the second law",
         created_at=AT,
