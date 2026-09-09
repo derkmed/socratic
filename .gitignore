@@ -16,5 +16,11 @@ __pycache__/
 .env.*
 !.env.example
 
+# The collected records trail (#117, ADR-0018): `compose.yaml` bind-mounts this
+# for the quiz service to write attempts and ratings into. Untracked rather than
+# absent — the whole record goes to disk, answer keys included, and that being
+# untracked is the only control on it.
+/data/
+
 # Agent worktrees: checkouts a subagent works in, regenerable and per-machine.
 .claude/worktrees/

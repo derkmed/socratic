@@ -175,6 +175,68 @@ service directly from inside the iframe, carrying a short-lived **capability
 token** that the service rotates on every graded response. The Pipe is called
 once, to start a quiz.
 
+## The collected records
+
+`docker compose up` collects data. Every quiz that finishes — or that a learner
+abandons by starting something else — is written to `./data/` as JSON, along
+with any rating it was given:
+
+```
+data/
+├── attempts/
+│   └── derek%40example.com/
+│       └── 01K4S9F2Q7X8M3N6P0R5T2V9WZ.json
+└── ratings/
+    └── derek%40example.com/
+        └── 01K4S9F2Q7X8M3N6P0R5T2V9WZ.json
+```
+
+One file per record, in a tree that mirrors the `learner_id` partition
+([ADR-0005](docs/adr/0005-persistence-contract.md)); the partition key is
+percent-encoded, because it is a learner id that became a path segment. Each
+file is a self-describing envelope around the record exactly as it was stored:
+
+```json
+{
+  "schema_version": "1",
+  "kind": "attempt",
+  "written_at": 1757332800000,
+  "record": {
+    "attempt_id": "01K4S9F2Q7X8M3N6P0R5T2V9WZ",
+    "learner_id": "derek@example.com",
+    "mode": "novice",
+    "topic": "the second law",
+    "outcome": "resolved",
+    "created_at": "2026-09-08T12:00:00+00:00",
+    "sealed_at": "2026-09-08T12:07:31+00:00",
+    "quiz": { "explanation": [ { "kind": "text", "text": "Heat flows because " } ] },
+    "guesses": [ { "blank_id": "b1", "verdict": "correct", "graded_by": "deterministic" } ]
+  }
+}
+```
+
+**It is written, never read.** The service boots with empty repositories every
+time, so a restart still loses any quiz that was in flight — these files look
+like durable state and are not. They are the audit trail, and the corpus the
+offline profile job scans
+([ADR-0018](docs/adr/0018-collected-records-on-disk.md)).
+
+Two knobs, both on the `quiz-service` container:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `SOCRATIC_DATA_DIR` | `/data` | Where the trail goes. **Unset it and nothing is collected at all** — the service runs exactly as it did before this existed. An unwritable path refuses the boot rather than collecting nothing quietly. |
+| `SOCRATIC_DATA_FLUSH` | `on_close` | `on_close` writes an attempt once, when it seals or is abandoned. `every_save` writes on every guess and probe, so you can watch files appear while you take a quiz — useful for a demo, at the cost of rewriting a growing document up to ~120 times. |
+
+Neither is a learner setting, and neither is accepted from a caller: the
+difficulty mode shapes a quiz, but an audit trail a caller can reshape
+per-request is not an audit trail.
+
+`./data/` is gitignored. The whole record goes to disk, **answer keys
+included** — [ADR-0003](docs/adr/0003-grading-authority-and-key-custody.md)'s key
+custody governs what crosses to the browser, and a redacted attempt would be
+worthless to the profile job — so being untracked is the only control on it.
+
 ## Constraint: a default Open WebUI install only
 
 The prototype targets a **default install**, meaning `IFRAME_CSP` is unset,
