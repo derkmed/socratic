@@ -35,6 +35,8 @@
     line-height:1.08;letter-spacing:-.015em;margin:0 0 .6rem;text-wrap:balance;}
   h2{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:1.5rem;
     line-height:1.2;margin:0 0 .35rem;text-wrap:balance;}
+  h3{font-family:Fraunces,Georgia,serif;font-weight:600;font-size:1.08rem;
+    margin:1.4rem 0 .3rem;}
   p{margin:0 0 .9rem;}
   .lede{font-size:1.12rem;color:var(--muted);max-width:38rem;}
   .eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.7rem;
@@ -48,17 +50,24 @@
 
   section{display:flex;flex-direction:column;gap:1.1rem;}
   figure{margin:0;display:flex;flex-direction:column;gap:.75rem;}
-  .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);
-    border-radius:5px;padding:1.25rem;box-shadow:var(--shadow);}
-  /* Natural size inside a scrolling frame, as the drawing next door does it:
-     shrinking the whole graph to the page width makes every label unreadable. */
-  .mermaid svg{display:block;max-width:none;height:auto;}
+  .frame{background:var(--surface);border:1px solid var(--rule);
+    border-radius:5px;padding:1.5rem 1rem;box-shadow:var(--shadow);}
+  /* The graph is sized to fit the column. If it ever needs a scrollbar to be
+     read, that is a signal the diagram is carrying too much and the detail
+     belongs in the prose below, not that the frame needs to be wider. */
+  .mermaid svg{display:block;margin:0 auto;max-width:100%;height:auto;}
   figcaption{font-size:.92rem;color:var(--muted);max-width:40rem;}
 
   .note{border-left:2px solid var(--key);padding:.15rem 0 .15rem 1rem;color:var(--muted);
     font-size:.95rem;max-width:38rem;}
   ul{margin:0 0 .9rem;padding-left:1.15rem;}
-  li{margin-bottom:.5rem;}
+  li{margin-bottom:.55rem;}
+  .key{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.35rem 1.5rem;
+    font-size:.88rem;color:var(--muted);}
+  .key li{margin:0;}
+  .swatch{display:inline-block;width:1.6rem;vertical-align:middle;margin-right:.4rem;
+    border-top:2px solid var(--muted);}
+  .swatch.dash{border-top-style:dashed;}
   hr{border:0;border-top:1px solid var(--rule);margin:0;}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
@@ -80,95 +89,65 @@
   <div class="col">
     <p class="fignum">Figure 1</p>
     <h2>The whole system</h2>
-    <p>Two containers, one browser, one offline job. Solid arrows are paths that run today; dashed
-    ones are decided but not yet built. The <strong>portability seam</strong> is a process boundary
-    now rather than a convention &mdash; the domain runs as its own service, so an Open WebUI import
-    below it would not resolve.</p>
+    <p>Two containers, one browser, one offline job. The figure carries the <em>shape</em> only
+    &mdash; who talks to whom, and which way. What each box holds is set out under
+    <a href="#reading">Reading the figure</a>, because a diagram that states everything states
+    nothing legibly.</p>
   </div>
   <figure>
-    <div class="scroll">
+    <div class="frame">
 <pre class="mermaid">
 flowchart TB
     subgraph BROWSER["Learner's browser"]
-        CHAT["Open WebUI chat<br/>picks model 'socratic', asks a question"]
-        IFRAME["Overlay<br/>sandboxed srcdoc iframe, opaque origin<br/>holds capability token, no answer key"]
+        CHAT["Open WebUI chat"]
+        IFRAME["Overlay iframe<br/>sandboxed, opaque origin"]
     end
 
-    subgraph OWUI["open-webui container :3000"]
-        PIPE["Pipe — pipe/socratic_pipe.py<br/>the whole adapter: __user__ to LearnerId<br/>Valves: service_url, service_token, mode, probe_cadence"]
+    subgraph OWUI["open-webui :3000"]
+        PIPE["Pipe<br/>the whole adapter"]
     end
 
-    subgraph SVC["quiz-service container :8080 — FastAPI"]
-        subgraph HTTP["Routes — service/app.py"]
-            R1["POST /quizzes<br/>POST /overlays"]
-            R2["POST /settings"]
-            R3["POST /answers<br/>POST /probes"]
-            R4["POST /displacements<br/>POST /ratings"]
-        end
-
-        SEC["security<br/>service token header (Pipe)<br/>capability token (iframe): HMAC, one<br/>QuizSessionId + LearnerId, short TTL"]
-
-        subgraph DOMAIN["domain/ — below the portability seam"]
-            INTAKE["InquiryIntake<br/>new / queued / displacement"]
-            AUTHOR["QuizAuthoring<br/>mints ULID QuizSessionId<br/>skeleton then pedagogy"]
-            SESSION["QuizSession<br/>grade, hint ladder rung,<br/>probe cadence, seal"]
-            REG["ModeRegistry to ModePolicy<br/>the only place mode is branched on<br/>NOVICE 1-2 blanks / ADVANCED 4-6"]
-            PROMPT["prompting<br/>seg 1 invariant (cached, per call type)<br/>seg 2 profile+quiz | volatile tail"]
-            MC["ModelClient protocol<br/>5 call types"]
-        end
-
-        subgraph RENDER["rendering/ + ui/"]
-            SAN["sanitiser, markdown, mathml<br/>LaTeX to MathML server-side"]
-            OV["overlay.render_overlay<br/>self-contained HTML, no CDN/font/JS deps"]
-        end
-
-        subgraph REPOS["repositories — in-memory today (ADR-0005)"]
-            AR[("AttemptRepository<br/>QuizAttempt: quiz + guesses + probes<br/>answer key never leaves here")]
-            RR[("RatingRepository")]
-            SR[("LearnerSettingsRepository")]
-            PR[("LearnerProfileRepository<br/>not reachable from the service")]
-        end
+    subgraph SVC["quiz-service :8080"]
+        API["FastAPI routes"]
+        SEC["Token check"]
+        AUTHOR["QuizAuthoring"]
+        SESSION["QuizSession"]
+        REG["ModeRegistry"]
+        PROMPT["prompting"]
+        RENDER["sanitise + render"]
+        STORE[("Repositories<br/>in memory")]
     end
 
-    ANTH["adapters/anthropic_client.py<br/>Anthropic Messages API — claude-opus-5, effort low"]
-    DISK[/"Collected records on disk<br/>write-only audit trail — ADR-0018, not built yet"/]
-    PB["ProfileBuilder — offline job<br/>ledger (authoritative) + folded narrative<br/>advances a watermark, never on the critical path"]
+    ANTH["Anthropic API"]
+    PB["ProfileBuilder<br/>offline"]
 
-    CHAT -->|"inquiry"| PIPE
-    PIPE -->|"POST /overlays + service token<br/>via compose DNS quiz-service:8080"| R1
-    PIPE -->|"UserValves changed"| R2
-    R1 --> SEC --> INTAKE --> AUTHOR
+    CHAT -->|question| PIPE
+    PIPE -->|service token| API
+    API --> SEC
+    SEC --> AUTHOR
+    SEC --> SESSION
     AUTHOR --> REG
-    AUTHOR --> PROMPT --> MC --> ANTH
-    AUTHOR --> AR
-    R1 --> SAN --> OV
-    OV -->|"HTML + capability token + SOCRATIC_PUBLIC_URL"| R1
-    R1 -->|"HTML"| PIPE
-    PIPE -->|"emits an 'embeds' event, never returns it (ADR-0017)"| IFRAME
-
-    IFRAME -->|"fetch direct to localhost:8080<br/>bearer capability token"| R3
-    IFRAME --> R4
-    R3 --> SEC --> SESSION
     SESSION --> REG
-    SESSION --> AR
-    SESSION -->|"Advanced only: grade_answer / grade_probe"| PROMPT
-    SESSION --> SAN
-    R3 -->|"verdict, feedback_html, hint rung,<br/>optional probe, fresh capability token"| IFRAME
-    R2 --> SR
-    R4 --> RR
-    R4 --> AR
-    SESSION -.->|"reads cadence only, never mode"| SR
-
-    AR -.-> DISK
-    RR -.-> DISK
-    DISK -.-> PB
-    PB -.-> PR
-    PR -.->|"segment 2"| PROMPT
-
-    classDef seam stroke-dasharray:5 3
-    class DISK,PB seam
+    AUTHOR --> STORE
+    SESSION --> STORE
+    AUTHOR --> PROMPT
+    SESSION -.->|Advanced only| PROMPT
+    PROMPT --> ANTH
+    AUTHOR --> RENDER
+    SESSION --> RENDER
+    RENDER -->|overlay HTML| API
+    API -->|HTML| PIPE
+    PIPE ==>|embeds event| IFRAME
+    IFRAME ==>|capability token| API
+    STORE -.-> PB
+    PB -.->|profile| PROMPT
 </pre>
     </div>
+    <ul class="key">
+      <li><span class="swatch"></span>runs today</li>
+      <li><span class="swatch dash"></span>decided, not built &mdash; or conditional</li>
+      <li><strong>Bold:</strong> the two hops that cross a trust boundary</li>
+    </ul>
     <figcaption>Drawn from <code>service/app.py</code>, <code>pipe/socratic_pipe.py</code> and the
     <code>domain/</code> package as they stand on 9 September 2026.</figcaption>
   </figure>
@@ -176,31 +155,50 @@ flowchart TB
 
 <hr>
 
-<section class="col">
-  <h2>What the figure is saying</h2>
+<section class="col" id="reading">
+  <h2>Reading the figure</h2>
+
+  <h3>Two paths to the service, two credentials</h3>
+  <p>The Pipe reaches the service by its compose DNS name with the shared
+  <code>SOCRATIC_SERVICE_TOKEN</code>. The iframe reaches it from the learner&rsquo;s browser at
+  <code>SOCRATIC_PUBLIC_URL</code> with an HMAC capability token scoped to one
+  <code>QuizSessionId</code> and its <code>LearnerId</code>, short TTL, re-minted on every grading
+  response. It needs its own credential because a sandboxed <code>srcdoc</code> frame has an opaque
+  origin and cannot authenticate by any ambient means. <code>ServiceDependencies</code> holds the
+  two as separate fields so no handler can accept either.</p>
+
+  <h3>The overlay is emitted, not returned</h3>
+  <p>The Pipe awaits <code>__event_emitter__</code> with an <code>embeds</code> event
+  (<a href="../adr/0017-the-overlay-is-emitted-not-returned.md">ADR-0017</a>). A Pipe that returns
+  it renders nothing at all, silently.</p>
+
+  <h3>What the boxes hold</h3>
   <ul>
-    <li><strong>Two network paths to the service, two credentials.</strong> The Pipe reaches it by
-    the compose DNS name with the shared <code>SOCRATIC_SERVICE_TOKEN</code>; the iframe reaches it
-    from the learner&rsquo;s browser at <code>SOCRATIC_PUBLIC_URL</code> with an HMAC capability
-    token scoped to one session &mdash; because a sandboxed <code>srcdoc</code> frame has an opaque
-    origin and cannot authenticate by any ambient means. <code>ServiceDependencies</code> keeps the
-    two as separate fields so no handler can accept either.</li>
-    <li><strong>The overlay is emitted, not returned.</strong> The Pipe awaits
-    <code>__event_emitter__</code> with an <code>embeds</code> event (ADR-0017). A Pipe that returns
-    it renders nothing at all, silently.</li>
-    <li><strong>Model calls only where the arrows show them.</strong> Authoring always &mdash;
-    skeleton then pedagogy. Grading only in Advanced: Novice feedback is wholly pre-authored, so a
-    Novice answer costs zero model calls.</li>
-    <li><strong>Mode is branched on in exactly one place.</strong> Everything that varies by mode is
-    bundled into a <code>ModePolicy</code> behind <code>ModeRegistry</code>; an
+    <li><strong>FastAPI routes</strong> &mdash; seven: <code>/quizzes</code>,
+    <code>/overlays</code>, <code>/answers</code>, <code>/probes</code>, <code>/settings</code>,
+    <code>/displacements</code>, <code>/ratings</code>.</li>
+    <li><strong>QuizAuthoring</strong> &mdash; mints the ULID <code>QuizSessionId</code>, then two
+    model calls: skeleton, then pedagogy.</li>
+    <li><strong>QuizSession</strong> &mdash; grading, the three-rung hint ladder, probe cadence,
+    sealing. Its model calls are dashed because <strong>only Advanced makes them</strong>: Novice
+    feedback is wholly pre-authored, so a Novice answer costs zero model calls.</li>
+    <li><strong>ModeRegistry</strong> &mdash; the one place mode is branched on. Holds the
+    per-mode policy, including the blank range: Novice 1&ndash;2, Advanced 4&ndash;6. An
     <code>if mode ==</code> anywhere else is a bug.</li>
+    <li><strong>prompting</strong> &mdash; three segments. Segment 1 is invariant and cached, one
+    prefix per call type; segment 2 is the learner profile and the quiz; the volatile tail is never
+    cached. Five call types means five separate prefixes.</li>
+    <li><strong>Repositories</strong> &mdash; attempts, ratings, settings, profiles. The
+    <strong>answer key lives here and is never serialized into the iframe</strong>.</li>
+    <li><strong>Anthropic API</strong> &mdash; <code>claude-opus-5</code>, effort <code>low</code>,
+    set by an admin Valve rather than per learner, because caches are model-scoped.</li>
   </ul>
-  <p class="note">Dashed means decided, not built. <code>adapters/</code> holds only
+
+  <p class="note">Dashed also means decided but not built. <code>adapters/</code> holds only
   <code>anthropic_client.py</code> today; the on-disk record writer of
   <a href="../adr/0018-collected-records-on-disk.md">ADR-0018</a> and the
-  <code>ProfileBuilder</code> wiring are not in the running service, and
-  <code>LearnerProfileRepository</code> is not reachable from it at all. Storage is in-memory, so a
-  restart loses every in-flight quiz.</p>
+  <code>ProfileBuilder</code> wiring are not in the running service, and the profile repository is
+  not reachable from it at all. Storage is in memory, so a restart loses every in-flight quiz.</p>
 </section>
 
 </div>
@@ -216,7 +214,9 @@ flowchart TB
     startOnLoad: true,
     theme: "base",
     securityLevel: "strict",
-    flowchart: { curve: "basis", htmlLabels: true, useMaxWidth: false },
+    // useMaxWidth keeps the graph inside the column instead of forcing the page
+    // to scroll sideways; it only reads well because the labels are short.
+    flowchart: { curve: "basis", htmlLabels: true, useMaxWidth: true, nodeSpacing: 30, rankSpacing: 40 },
     themeVariables: {
       background: v("--surface"),
       primaryColor: v("--surface-2"),
