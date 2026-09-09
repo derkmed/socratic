@@ -270,22 +270,28 @@ _validate_advanced_blank = _both(
 )
 
 
+_OPTION_ITEM: Mapping[str, object] = {
+    "type": "object",
+    "properties": {
+        "option_id": {"type": "string"},
+        "text": {"type": "string"},
+    },
+    "required": ["option_id", "text"],
+    "additionalProperties": False,
+}
+"""One option in an option bank, spelled out once.
+
+Structured outputs reject any object node that is not strict, so this shape has
+to be stated wherever an option array is declared. Stating it once is what stops
+the mode fragments from disagreeing about it - which is exactly what #73 was.
+"""
+
+
 _NOVICE_SCHEMA_FRAGMENT: Mapping[str, object] = {
     "type": "object",
     "properties": {
         "blank_id": {"type": "string"},
-        "options": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "option_id": {"type": "string"},
-                    "text": {"type": "string"},
-                },
-                "required": ["option_id", "text"],
-                "additionalProperties": False,
-            },
-        },
+        "options": {"type": "array", "items": _OPTION_ITEM},
         "correct_option_id": {"type": "string"},
         "reinforcement": {"type": "string"},
         "hints": {"type": "array", "items": {"type": "string"}},
@@ -308,7 +314,7 @@ _ADVANCED_SCHEMA_FRAGMENT: Mapping[str, object] = {
     "type": "object",
     "properties": {
         "blank_id": {"type": "string"},
-        "options": {"type": ["array", "null"], "items": {"type": "object"}},
+        "options": {"type": ["array", "null"], "items": _OPTION_ITEM},
         "correct_option_id": {"type": ["string", "null"]},
         "reinforcement": {"type": ["string", "null"]},
         "hints": {"type": ["array", "null"], "items": {"type": "string"}},
@@ -330,18 +336,7 @@ _ADVANCED_SCHEMA_FRAGMENT: Mapping[str, object] = {
 
 _BLANK_ID = {"blank_id": {"type": "string"}}
 
-_OPTIONS = {
-    "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "option_id": {"type": "string"},
-            "text": {"type": "string"},
-        },
-        "required": ["option_id", "text"],
-        "additionalProperties": False,
-    },
-}
+_OPTIONS = {"type": "array", "items": _OPTION_ITEM}
 
 _NOVICE_SKELETON_FRAGMENT: Mapping[str, object] = {
     "type": "object",
