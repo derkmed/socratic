@@ -28,16 +28,15 @@ import json
 
 import pytest
 
-fastapi = pytest.importorskip("fastapi", reason="the service extra is optional")
+pytest.importorskip("fastapi", reason="the service extra is optional")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from socratic.domain import rating as rating_module  # noqa: E402
 from socratic.domain.authoring import QuizAuthoring  # noqa: E402
 from socratic.domain.model_client import (  # noqa: E402
     ModelResponse,
     RecordingModelClient,
 )
-from socratic.domain.modes import DifficultyMode, ProbeCadence  # noqa: E402
+from socratic.domain.modes import DifficultyMode  # noqa: E402
 from socratic.domain.prompting import CallType  # noqa: E402
 from socratic.domain.repositories import (  # noqa: E402
     InMemoryAttemptRepository,

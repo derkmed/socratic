@@ -10,7 +10,7 @@ Two properties are *only* true here, so they are asserted in `test_service.py`:
 authorization runs before any work, and the response carries a rotated token.
 """
 
-from typing import Any, Callable
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
