@@ -97,6 +97,16 @@ Capped at one re-open per blank; a second failed probe reveals and moves on.
 **ModeRegistry** — maps mode to policy. **The only place mode is branched on.** An
 `if mode ==` anywhere else is a bug.
 
+**LearnerSettings** — the two per-learner settings as one value: the mode toggle
+and `probe_cadence`. What the Pipe maps `UserValves` into, and the value the
+byte-identity assertion varies, so the next toggle is swept into it rather than
+needing its own test. Carries **no model and no effort** — those are admin
+`Valve`s (ADR-0014) and there is no field for them. The mode is *carried, not
+validated*: `ModeRegistry` stays the only place mode is branched on. Held per
+learner by `LearnerSettingsRepository`, written by the Pipe through the quiz
+service's settings route, and read on the answering path for the cadence alone —
+never for the mode.
+
 **Mode toggle** — a per-learner setting held in Open WebUI's `UserValves`.
 Applies from the **next authoring call**; a quiz in flight finishes in the mode it
 was born in. One attempt, one mode — a Novice quiz has no rubrics and an Advanced

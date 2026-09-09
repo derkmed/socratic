@@ -32,6 +32,13 @@ class ServiceDependencies:
     ratings: repositories.RatingRepository
     minter: TokenMinter
     service_token: str
+    settings: repositories.LearnerSettingsRepository = None  # type: ignore[assignment]
+    """The learner's current settings, recorded by the Pipe (#14, ADR-0010).
+
+    Defaulted rather than required, the way `registry` is: a deployment that
+    never records any settings behaves exactly as it did before the field
+    existed, because the answering path falls back to the attempt's own
+    `probe_cadence_at_authoring`."""
     registry: ModeRegistry = None  # type: ignore[assignment]
     clock: ids.Clock = ids.system_clock
     public_base_url: str = DEFAULT_PUBLIC_URL
@@ -42,5 +49,9 @@ class ServiceDependencies:
     def __post_init__(self) -> None:
         if self.registry is None:
             object.__setattr__(self, "registry", default_registry())
+        if self.settings is None:
+            object.__setattr__(
+                self, "settings", repositories.InMemoryLearnerSettingsRepository()
+            )
         if not self.service_token:
             raise ValueError("the service token must not be empty")

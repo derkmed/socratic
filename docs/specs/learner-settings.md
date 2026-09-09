@@ -90,7 +90,10 @@ way `registry` already is, so existing wiring is untouched.
 - `POST /settings` — service-token authorized, body `{learner_id, mode?,
   probe_cadence?}`, records the learner's settings and returns `{"ok": true}`.
   The Pipe (#12) calls it whenever it observes `UserValves`; a bad cadence is a
-  422 by the same translation `/quizzes` already uses.
+  422 by the same translation `/quizzes` already uses. It is a **replace, not a
+  patch**: `UserValves` is read whole on the Pipe's side, so a setting the body
+  omits is one the learner has not set, and the store stays a copy of the valves
+  rather than a merge of everything ever sent.
 - `/quizzes` and `/overlays` — record the settings the request names before
   authoring with them, so authoring is itself a sync point and the common case
   needs no extra call.

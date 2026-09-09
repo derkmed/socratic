@@ -18,7 +18,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from socratic.domain import rating as rating_module
 from socratic.domain import types
+from socratic.domain.modes import ProbeCadence
 from socratic.domain.records import QuizAttempt
+from socratic.domain.settings import LearnerSettings
 from socratic.domain.tokens import Claims
 from socratic.service import payloads, security
 from socratic.service.deps import ServiceDependencies
@@ -64,6 +66,18 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             )
         return claims, attempt
 
+    def _current_cadence(learner_id: str) -> ProbeCadence | None:
+        """The learner's cadence right now, or `None` for "they never said".
+
+        `None` is not the same as `sometimes`: it lets `QuizSession.submit`
+        fall back to the attempt's `probe_cadence_at_authoring`, so a learner
+        who has never touched their valves keeps playing the quiz they were
+        given. The mode is deliberately not read here - one attempt, one mode
+        (CONTEXT: Mode toggle).
+        """
+        recorded = deps.settings.get(learner_id)
+        return None if recorded is None else recorded.probe_cadence
+
     def _authored(body: payloads.AuthorRequest) -> dict[str, Any]:
         """Author, mint if there is a session, and shape the wire body.
 
@@ -72,11 +86,18 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
         the body the JSON route returns, which is what keeps the answer key's
         whitelist the only thing standing between the key and the browser.
         """
+        settings = _settings(
+            body.learner_id, mode=body.mode, probe_cadence=body.probe_cadence
+        )
+        # Authoring is itself a sync point, so the common case - a learner who
+        # changes a valve and then asks a question - needs no separate call.
+        deps.settings.save(settings)
+
         result = deps.authoring.author(
             body.inquiry,
             body.learner_id,
-            mode=body.mode,
-            **_cadence(body.probe_cadence),
+            mode=settings.mode,
+            probe_cadence=settings.probe_cadence,
         )
 
         if isinstance(result, types.DirectAnswer):
@@ -128,6 +149,35 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             headers={"Content-Disposition": "inline"},
         )
 
+    @app.post("/settings")
+    def record_settings(
+        body: payloads.SettingsRequest,
+        presented: str | None = Depends(security.service_header),
+    ) -> JSONResponse:
+        """The learner's `UserValves`, pushed by the Pipe (#14, ADR-0010).
+
+        The route exists because "mid-quiz" would otherwise have no meaning
+        above the domain: between authoring and sealing the only actor talking
+        to this service is the iframe, and the iframe cannot see `UserValves`.
+        So a change has to arrive here, from the Pipe, server to server - which
+        is why it carries the service token rather than a capability one. A
+        learner's iframe naming another learner in the body must not be able to
+        rewrite their settings.
+
+        **A replace, not a patch.** `UserValves` is read whole on the Pipe's
+        side, so a setting the body omits is one the learner has not set — and
+        writing the whole document keeps the store a copy of the valves rather
+        than a merge of everything ever sent.
+        """
+        security.require_service_token(deps, presented)
+
+        deps.settings.save(
+            _settings(
+                body.learner_id, mode=body.mode, probe_cadence=body.probe_cadence
+            )
+        )
+        return _json({"ok": True})
+
     @app.post("/answers")
     def submit_answer(
         body: payloads.AnswerRequest,
@@ -140,6 +190,7 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
             attempt_id=attempt.attempt_id,
             blank_id=body.blank_id,
             submitted=body.submitted,
+            probe_cadence=_current_cadence(claims.learner),
         )
 
         return _json(
@@ -210,19 +261,25 @@ def create_app(deps: ServiceDependencies) -> FastAPI:
     return app
 
 
-def _cadence(value: str | None) -> dict[str, Any]:
-    """Pass the cadence only when the caller named one, so the domain's own
-    default stays the single place it is written down."""
-    from socratic.domain.modes import ProbeCadence
+def _settings(
+    learner_id: str, *, mode: str | None, probe_cadence: str | None
+) -> LearnerSettings:
+    """The wire's strings as the domain's settings value, or a 422.
 
-    if value is None:
-        return {}
+    The four cadence values and the defaults are written down once, in
+    `LearnerSettings`; this is only the translation of its refusal into a
+    status code. An unknown *mode* is deliberately not refused here - the
+    registry refuses it on the authoring call, before the model is consulted,
+    and staying out of that keeps `ModeRegistry` the only place mode is
+    branched on (CONTEXT).
+    """
     try:
-        return {"probe_cadence": ProbeCadence(value)}
-    except ValueError:
+        return LearnerSettings.parse(
+            learner_id, mode=mode, probe_cadence=probe_cadence
+        )
+    except ValueError as error:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"unknown probe cadence: {value!r}",
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)
         ) from None
 
 

@@ -42,6 +42,21 @@ class AuthorRequest(_Strict):
     probe_cadence: Optional[str] = None
 
 
+class SettingsRequest(_Strict):
+    """A learner's `UserValves`, as the Pipe reads them (#14, ADR-0010).
+
+    Both settings are optional, and `None` means "this learner has never set
+    it" rather than "set it back to the default" - the same distinction
+    `LearnerSettings.parse` makes. There is no model and no effort field:
+    those are admin-level `Valve`s (ADR-0014), and `extra="forbid"` means a
+    request that names one is refused rather than having it dropped.
+    """
+
+    learner_id: str = Field(min_length=1)
+    mode: Optional[str] = None
+    probe_cadence: Optional[str] = None
+
+
 class _SessionScoped(_Strict):
     """Every iframe request names the session it addresses.
 

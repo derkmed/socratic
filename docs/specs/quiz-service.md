@@ -11,7 +11,10 @@ Open WebUI import below it would not resolve (D15,
 34, 37).
 
 Four endpoints: author a quiz, submit an answer, answer a probe, submit a
-rating. Every request is authorized before any work happens, and every *grading*
+rating. (A fifth, `POST /settings`, was added by
+[#14](https://github.com/derkmed/socratic/issues/14) —
+`learner-settings.md` — on the same service credential and the same
+"translation over a seam" rule.) Every request is authorized before any work happens, and every *grading*
 response carries a freshly rotated **capability token** (CONTEXT).
 
 ## Seams
