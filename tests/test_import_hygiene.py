@@ -171,8 +171,24 @@ def _run_in_a_child_interpreter(code: str) -> subprocess.CompletedProcess:
     decoder over cp1252 bytes raises inside subprocess's reader thread and
     leaves `stderr` as `None`. `errors="replace"` is the same argument once
     more — for a string read only to explain a failure, mangled beats absent.
+
+    `PYTHONPATH` carries `src`, because every caller's code begins by
+    importing `socratic` and nothing else would put the package within the
+    child's reach (#79). `pytest`'s `pythonpath = ["src"]` configures this
+    process alone, and the child runs with `-c`, so its `sys.path[0]` is the
+    cwd — the project root, where `socratic` is not. Set here rather than by
+    moving `cwd` into `src`, which would contradict the line above. Any
+    ambient `PYTHONPATH` is kept behind it, for the same reason this dict
+    layers onto `os.environ` instead of replacing it.
     """
-    environ = dict(os.environ, PYTHONIOENCODING="utf-8")
+    python_path = os.pathsep.join(
+        path
+        for path in (str(SOURCE_ROOT.parent), os.environ.get("PYTHONPATH"))
+        if path
+    )
+    environ = dict(
+        os.environ, PYTHONIOENCODING="utf-8", PYTHONPATH=python_path
+    )
     return subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
@@ -229,6 +245,26 @@ def test_the_child_interpreter_reports_non_ascii_diagnostics_intact(monkeypatch)
 
     assert result.returncode != 0
     assert "the domain — imported the SDK" in result.stderr
+
+
+def test_the_child_interpreter_can_reach_the_package_source():
+    # The helper above is the only route to a child interpreter in this file,
+    # and every guard that uses it starts by importing `socratic` — so the
+    # path it hands the child is the guard's real precondition (#79).
+    #
+    # Asserted against the child's own `sys.path` rather than by importing the
+    # package, because an import succeeds for the wrong reason wherever
+    # `socratic` happens to be pip-installed. `pytest`'s `pythonpath = ["src"]`
+    # configures this process only; a subprocess inherits none of it.
+    result = _run_in_a_child_interpreter(
+        "import pathlib\n"
+        "import sys\n"
+        "for entry in sys.path:\n"
+        "    print(pathlib.Path(entry).resolve())\n"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert str(SOURCE_ROOT.parent) in result.stdout.splitlines(), result.stdout
 
 
 # --- The process boundary (issue #19, acceptance 37) -------------------------
