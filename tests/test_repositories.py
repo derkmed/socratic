@@ -198,6 +198,140 @@ class TestAttemptRepository:
         assert repository.get("learner-1", attempt.attempt_id).guesses == ()
 
 
+class TestLookupBySession:
+    """`get_by_session`, which every caller holding a capability token needs.
+
+    The token is scoped to a `QuizSessionId` (CONTEXT: Capability token) and the
+    attempt is keyed by its own ULID (ADR-0007), so a session cannot be turned
+    into an attempt id by construction - the port has to offer the lookup, or
+    every caller reads the whole partition on a learner's hot path.
+
+    The contract is **the latest attempt on that session**, not the first and
+    not the in-flight one: a lone sealed attempt is still the attempt for its
+    session, and where #15 leaves two, mint order names the restart.
+    """
+
+    def test_an_attempt_is_found_by_its_session(self):
+        repository = InMemoryAttemptRepository()
+        attempt = _attempt()
+        repository.save(attempt)
+
+        assert repository.get_by_session("learner-1", attempt.session_id) == attempt
+
+    def test_an_unknown_session_reads_none(self):
+        # `None` rather than `KeyError`: a session with no attempt is what a
+        # stale token looks like, and the caller decides what that means.
+        repository = InMemoryAttemptRepository()
+        repository.save(_attempt())
+        assert repository.get_by_session("learner-1", str(Ulid.mint())) is None
+
+    def test_a_session_is_looked_up_inside_the_partition(self):
+        # No cross-partition read path, the same as `get`.
+        repository = InMemoryAttemptRepository()
+        theirs = _attempt("learner-2")
+        repository.save(theirs)
+        assert repository.get_by_session("learner-1", theirs.session_id) is None
+
+    def test_a_sealed_attempt_is_still_the_attempt_for_its_session(self):
+        # The pedagogy payload landing late reads the sealed attempt to decide
+        # to drop itself (`authoring.author_pedagogy`); an in-flight-only
+        # lookup would turn that into a `KeyError`.
+        repository = InMemoryAttemptRepository()
+        sealed = _attempt().sealed(LATER)
+        repository.save(sealed)
+
+        assert repository.get_by_session("learner-1", sealed.session_id) == sealed
+
+    def test_only_the_named_session_is_returned(self):
+        repository = InMemoryAttemptRepository()
+        mine = _attempt()
+        other = _attempt()
+        repository.save(mine)
+        repository.save(other)
+
+        assert repository.get_by_session("learner-1", mine.session_id) == mine
+        assert repository.get_by_session("learner-1", other.session_id) == other
+
+    def test_a_session_with_an_abandoned_and_an_in_flight_attempt_reads_the_restart(
+        self,
+    ):
+        # The case #15 creates: a displaced session restarted under the same
+        # `QuizSessionId`. The restart is minted later and ULIDs are
+        # order-preserving, so the latest attempt *is* the live one - no
+        # `outcome` filter needed.
+        repository = InMemoryAttemptRepository()
+        session_id = str(Ulid.mint())
+        displaced = _attempt(session_id=session_id).abandoned(LATER)
+        restarted = _attempt(session_id=session_id)
+        assert displaced.attempt_id < restarted.attempt_id
+        repository.save(displaced)
+        repository.save(restarted)
+
+        found = repository.get_by_session("learner-1", session_id)
+        assert found == restarted
+        assert found.outcome is Outcome.IN_FLIGHT
+
+    def test_the_order_the_two_are_written_in_does_not_decide(self):
+        repository = InMemoryAttemptRepository()
+        session_id = str(Ulid.mint())
+        displaced = _attempt(session_id=session_id).abandoned(LATER)
+        restarted = _attempt(session_id=session_id)
+        repository.save(restarted)
+        repository.save(displaced)
+
+        assert repository.get_by_session("learner-1", session_id) == restarted
+
+    def test_re_saving_an_attempt_leaves_the_lookup_reading_the_new_document(self):
+        # The hand-maintained index has to stay in step with the partition on
+        # every write, not just the first.
+        repository = InMemoryAttemptRepository()
+        attempt = _attempt()
+        repository.save(attempt)
+        repository.save(attempt)
+        guessed = attempt.with_guess(_guess())
+        repository.save(guessed)
+
+        assert repository.get_by_session("learner-1", attempt.session_id) == guessed
+
+    def test_sealing_an_attempt_leaves_the_lookup_reading_the_sealed_document(self):
+        repository = InMemoryAttemptRepository()
+        attempt = _attempt()
+        repository.save(attempt)
+        sealed = attempt.sealed(LATER)
+        repository.save(sealed)
+
+        found = repository.get_by_session("learner-1", attempt.session_id)
+        assert found == sealed
+        assert found.is_sealed
+
+    def test_the_lookup_still_agrees_with_the_partition_after_a_re_save(self):
+        # Drift is the failure mode of a hand-maintained index, so assert the
+        # two read paths against each other rather than only the new one.
+        repository = InMemoryAttemptRepository()
+        attempt = _attempt()
+        repository.save(attempt)
+        repository.save(attempt.with_guess(_guess()))
+
+        by_session = repository.get_by_session("learner-1", attempt.session_id)
+        assert by_session == repository.get("learner-1", attempt.attempt_id)
+        assert repository.list_for_learner("learner-1") == (by_session,)
+
+    def test_an_attempt_re_saved_under_another_session_leaves_no_stale_entry(self):
+        # One document, one session: if a caller rewrites the same attempt id
+        # under a different session, the entry it left behind must go or the
+        # old session keeps resolving to a document that no longer claims it.
+        repository = InMemoryAttemptRepository()
+        attempt = _attempt()
+        repository.save(attempt)
+        moved = _attempt(
+            attempt_id=attempt.attempt_id, session_id=str(Ulid.mint())
+        )
+        repository.save(moved)
+
+        assert repository.get_by_session("learner-1", attempt.session_id) is None
+        assert repository.get_by_session("learner-1", moved.session_id) == moved
+
+
 class TestRatingRepository:
     def test_a_rating_is_a_separate_record_leaving_the_attempt_untouched(self):
         # Acceptance 24.

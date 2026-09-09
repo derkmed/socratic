@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import abc
 
+from socratic.domain.ids import QuizSessionId
 from socratic.domain.profiles import LearnerProfile
 from socratic.domain.records import QuizAttempt, RatingRecord
 
@@ -45,6 +46,30 @@ class AttemptRepository(abc.ABC):
 
         Raises:
             KeyError: if that learner has no such attempt.
+        """
+
+    @abc.abstractmethod
+    def get_by_session(
+        self, learner_id: str, session_id: QuizSessionId
+    ) -> QuizAttempt | None:
+        """The latest attempt on a session, or `None` if there is none.
+
+        The lookup every caller arriving with a capability token needs: the
+        token is scoped to a `QuizSessionId` (CONTEXT: Capability token) and the
+        attempt is keyed by its own ULID (ADR-0007), so a session cannot be
+        turned into an attempt id by construction. Without this on the port each
+        such caller reads the whole partition on the learner's hot path.
+
+        **The latest, by attempt id.** A session holds one attempt today; once
+        [#15](https://github.com/derkmed/socratic/issues/15) lets a displaced
+        session be restarted it holds the abandoned one too, and ULIDs are
+        order-preserving, so the latest is the restart. Filtering on
+        `Outcome.IN_FLIGHT` instead would read the same attempt in that case and
+        lose a sealed one when it is the only attempt there is - which is
+        exactly what the late pedagogy payload reads to decide to drop itself.
+
+        `None` rather than `KeyError`: a session with no attempt is what a stale
+        token looks like, not a wiring mistake, and the caller decides.
         """
 
     @abc.abstractmethod
@@ -85,6 +110,10 @@ class InMemoryAttemptRepository(AttemptRepository):
 
     def __init__(self) -> None:
         self._partitions: dict[str, dict[str, QuizAttempt]] = {}
+        # The session index: learner -> session -> the attempt ids on it. It
+        # holds ids rather than documents, so there is one copy of every
+        # attempt and a re-save cannot leave a stale one behind here.
+        self._sessions: dict[str, dict[QuizSessionId, set[str]]] = {}
 
     def save(self, attempt: QuizAttempt) -> None:
         partition = self._partitions.setdefault(attempt.learner_id, {})
@@ -96,6 +125,25 @@ class InMemoryAttemptRepository(AttemptRepository):
             )
         partition[attempt.attempt_id] = attempt
 
+        sessions = self._sessions.setdefault(attempt.learner_id, {})
+        if stored is not None and stored.session_id != attempt.session_id:
+            # One document, one session: the entry the previous write left on
+            # the old session would otherwise resolve to a document that no
+            # longer claims it.
+            self._forget(sessions, stored)
+        sessions.setdefault(attempt.session_id, set()).add(attempt.attempt_id)
+
+    @staticmethod
+    def _forget(
+        sessions: dict[QuizSessionId, set[str]], stored: QuizAttempt
+    ) -> None:
+        attempt_ids = sessions.get(stored.session_id)
+        if attempt_ids is None:
+            return
+        attempt_ids.discard(stored.attempt_id)
+        if not attempt_ids:
+            del sessions[stored.session_id]
+
     def get(self, learner_id: str, attempt_id: str) -> QuizAttempt:
         try:
             return self._partitions[learner_id][attempt_id]
@@ -103,6 +151,17 @@ class InMemoryAttemptRepository(AttemptRepository):
             raise KeyError(
                 f"no attempt {attempt_id!r} in learner {learner_id!r}'s partition"
             ) from None
+
+    def get_by_session(
+        self, learner_id: str, session_id: QuizSessionId
+    ) -> QuizAttempt | None:
+        attempt_ids = self._sessions.get(learner_id, {}).get(session_id)
+        if not attempt_ids:
+            return None
+        # ULIDs are order-preserving, so the largest id is the latest attempt.
+        # The document comes from the partition, never from the index, so what
+        # this returns is by construction what `get` would return.
+        return self._partitions[learner_id][max(attempt_ids)]
 
     def list_for_learner(self, learner_id: str) -> tuple[QuizAttempt, ...]:
         partition = self._partitions.get(learner_id, {})

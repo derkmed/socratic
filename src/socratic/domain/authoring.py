@@ -277,22 +277,27 @@ class QuizAuthoring:
         return merged_attempt
 
     def _attempt_for(self, quiz: Quiz, learner_id: str) -> records.QuizAttempt:
-        """The in-flight attempt for this quiz's session.
+        """The attempt for this quiz's session.
 
-        Found by scanning the learner's partition, because that is what
-        `AttemptRepository` offers: it is keyed by attempt id, and the session
-        is deliberately a different key (ADR-0007). A learner has a handful of
-        attempts, so the scan costs nothing here; a store that grows past that
-        wants an index, which is the persistence port's problem and not this
-        path's.
+        The session is deliberately a different key from the attempt id
+        (ADR-0007), so the lookup belongs to the port rather than to a scan
+        written out here — this path is one of several arriving holding a
+        `QuizSessionId`, and against a store partitioned on `learner_id` the
+        scan is a full partition read on the learner's hot path (#47).
+
+        `get_by_session` reads the *latest* attempt on the session, which where
+        [#15](https://github.com/derkmed/socratic/issues/15) has left a
+        displaced one behind is the restart rather than the attempt it
+        displaced. A sealed attempt still comes back: dropping a late payload
+        is this method's caller's business, not the lookup's.
         """
-        for attempt in self._attempts.list_for_learner(learner_id):
-            if attempt.session_id == quiz.quiz_session_id:
-                return attempt
-        raise KeyError(
-            f"no attempt for session {quiz.quiz_session_id!r} in "
-            f"{learner_id!r}'s partition"
-        )
+        attempt = self._attempts.get_by_session(learner_id, quiz.quiz_session_id)
+        if attempt is None:
+            raise KeyError(
+                f"no attempt for session {quiz.quiz_session_id!r} in "
+                f"{learner_id!r}'s partition"
+            )
+        return attempt
 
     def _persist(
         self,
