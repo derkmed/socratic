@@ -20,6 +20,7 @@ from socratic.domain import rating as rating_module
 from socratic.domain import types
 from socratic.domain.modes import ProbeCadence
 from socratic.domain.records import QuizAttempt
+from socratic.domain.registry import UnknownMode
 from socratic.domain.settings import LearnerSettings
 from socratic.domain.tokens import Claims
 from socratic.service import payloads, security
@@ -271,7 +272,8 @@ def _settings(
     status code. An unknown *mode* is deliberately not refused here - the
     registry refuses it on the authoring call, before the model is consulted,
     and staying out of that keeps `ModeRegistry` the only place mode is
-    branched on (CONTEXT).
+    branched on (CONTEXT). That refusal reaches the wire as the same 422, named
+    the same way, through `_install_domain_error_handling` (#101).
     """
     try:
         return LearnerSettings.parse(
@@ -299,7 +301,22 @@ def _install_domain_error_handling(app: FastAPI) -> None:
     this learner", and `ValueError` is how the records refuse an inadmissible
     operation. Neither is a bug in the service, and neither should return a
     stack trace.
+
+    `UnknownMode` is the one `KeyError` that is not a missing thing but a bad
+    value, so it gets the 422 the neighbouring enum gets rather than a 404 no
+    Pipe could tell from a stale session (#101). Handlers are matched most
+    derived first, so the subclass wins over the `KeyError` below it. The
+    sentence is the registry's own — the service still has no opinion about
+    what modes exist, which is what keeps `ModeRegistry` the only place mode is
+    branched on (CONTEXT).
     """
+
+    @app.exception_handler(UnknownMode)
+    def _unknown_mode(_: Request, error: UnknownMode) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={"detail": error.detail},
+        )
 
     @app.exception_handler(KeyError)
     def _not_found(_: Request, error: KeyError) -> JSONResponse:

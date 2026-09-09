@@ -103,6 +103,13 @@ stamped on anything, so one type reaches everything below the seam. `mode_name` 
 the single way a key becomes its stored spelling; `.value` on a `ModeKey` is a bug
 for the same reason an `if mode ==` is.
 
+**UnknownMode** — the registry's refusal of a mode it holds no policy for. A
+`KeyError`, so every caller that expects one is unaffected, but a named one
+carrying the sentence the refusal deserves: the mode, the field, and the modes
+there are. The quiz service answers it with a **422**, not the 404 a missing
+session gets, and renders the registry's sentence rather than composing its own —
+translating a status is not an opinion about what a mode is.
+
 **LearnerSettings** — the two per-learner settings as one value: the mode toggle
 and `probe_cadence`. What the Pipe maps `UserValves` into, and the value the
 byte-identity assertion varies, so the next toggle is swept into it rather than

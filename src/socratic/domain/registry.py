@@ -8,6 +8,12 @@ validator rule, the render hint, `blank_range`, and `probe_failure_behavior`.
 **Adding a third mode is one registry entry.** An `if mode ==` anywhere outside
 this module is a bug, and `tests/test_registry.py` scans the package for one.
 
+**A mode nobody registered is `UnknownMode`** - a `KeyError`, so every caller
+that already documents one is unchanged, but a distinguishable one carrying the
+sentence the refusal deserves. That is what lets the service answer it with a
+422 naming the field and the modes there are, rather than the 404 a genuinely
+missing session gets, without the service learning what a mode is (#101).
+
 This module declares `validate_blank` as a policy field and populates it per
 mode. The `validate_quiz` entry point, and the bounds it enforces (the 20-blank
 storage cap, and `blank_range` rejecting first), live in `validation.py`, which
@@ -56,6 +62,34 @@ def mode_name(mode: ModeKey) -> str:
     bearing.
     """
     return str(getattr(mode, "value", mode))
+
+
+class UnknownMode(KeyError):
+    """No policy is registered for the mode a caller named (#101).
+
+    Still a `KeyError`, because that is what a lookup finding nothing has
+    always raised here and what every caller down the authoring path documents
+    - `QuizAuthoring.author`, `validate_quiz`, `output_schemas` - and a
+    subclass leaves all of them true. It is a *distinguishable* one so that the
+    service edge can tell "the value you sent is not one of the ones there are"
+    from "the thing you addressed does not exist": the first is a 422 naming
+    the field, the second the 404 a missing session gets.
+
+    Both halves of the refusal stay here. `detail` is the sentence the edge
+    renders, in the shape `LearnerSettings.parse` uses for the neighbouring
+    enum - the offending value, then the admissible ones - so translating it
+    into a status costs the service no opinion about what modes exist.
+    """
+
+    def __init__(self, mode: ModeKey, registered: tuple[ModeKey, ...]) -> None:
+        admissible = ", ".join(repr(mode_name(key)) for key in registered)
+        self.mode = mode_name(mode)
+        self.detail = (
+            f"unknown mode: {self.mode!r}; expected one of {admissible}"
+            if admissible
+            else f"unknown mode: {self.mode!r}; this registry holds none"
+        )
+        super().__init__(self.detail)
 
 
 BlankValidator = Callable[[Blank], "tuple[str, ...]"]
@@ -180,13 +214,14 @@ class ModeRegistry:
         what a mode is named, not `DifficultyMode`.
 
         Raises:
-          KeyError: If no policy is registered for `mode`. The one refusal both
-            lookups make, written here.
+          UnknownMode: If no policy is registered for `mode`. The one refusal
+            both lookups make, written here - and a `KeyError`, so a caller
+            that only knows to expect one is unaffected.
         """
         for key in self._policies:
             if key == mode:
                 return key
-        raise KeyError(f"no policy registered for mode {mode!r}")
+        raise UnknownMode(mode, self.modes())
 
     def modes(self) -> tuple[ModeKey, ...]:
         return tuple(self._policies)

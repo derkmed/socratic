@@ -24,8 +24,9 @@ no field here for one to arrive in, which is the enforcement.
 
 **The mode is carried, not validated.** `ModeRegistry` is the only place mode is
 branched on (CONTEXT), so a mode this module has never heard of is the
-registry's refusal on the authoring call — a `KeyError` before the model is
-consulted — rather than a second, competing opinion here. The cadence *is*
+registry's refusal on the authoring call — an `UnknownMode`, which is a
+`KeyError`, before the model is consulted — rather than a second, competing
+opinion here. Both refusals reach the wire as the same 422. The cadence *is*
 validated, because its four values are its whole definition and nothing
 downstream would catch a fifth.
 """
