@@ -14,6 +14,7 @@ import os
 
 import uvicorn
 
+from socratic.adapters import collected_records
 from socratic.adapters.anthropic_client import AnthropicModelClient
 from socratic.domain.authoring import QuizAuthoring
 from socratic.domain.repositories import (
@@ -30,14 +31,22 @@ from socratic.service.deps import ServiceDependencies
 def build_app():
     config = ServiceConfig.from_env()
     model_client = AnthropicModelClient()
-    attempts = InMemoryAttemptRepository()
+    # Wrapped rather than replaced: the trail is a writer bolted onto the
+    # repositories ADR-0005 already specified, and with `SOCRATIC_DATA_DIR`
+    # unset these are exactly the two objects that were here before (#117).
+    attempts, ratings = collected_records.wrap(
+        InMemoryAttemptRepository(),
+        InMemoryRatingRepository(),
+        data_dir=config.data_dir,
+        flush=config.data_flush,
+    )
 
     return create_app(
         ServiceDependencies(
             authoring=QuizAuthoring(model_client=model_client, attempts=attempts),
             session=QuizSession(model_client=model_client, attempts=attempts),
             attempts=attempts,
-            ratings=InMemoryRatingRepository(),
+            ratings=ratings,
             minter=TokenMinter(config.token_secret, ttl_millis=config.ttl_millis),
             service_token=config.service_token,
             public_base_url=config.public_base_url,

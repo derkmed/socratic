@@ -24,10 +24,28 @@ services:
       # every answer to Open WebUI instead. Not the compose DNS name below:
       # that one is only reachable from inside the network.
       SOCRATIC_PUBLIC_URL: ${SOCRATIC_PUBLIC_URL:-http://localhost:8080}
+      # The collected records trail (#117, ADR-0018). On by default: a
+      # demonstration of data collection that collects nothing until a second
+      # variable is set demonstrates the opposite. Write-only — the service
+      # never reads this directory back, so a restart still loses every
+      # in-flight quiz.
+      SOCRATIC_DATA_DIR: ${SOCRATIC_DATA_DIR:-/data}
+      # `on_close` writes an attempt once, when it is sealed or abandoned;
+      # `every_save` writes on every guess and probe, so files appear while a
+      # quiz is being taken. Held here rather than in the Pipe's valves beside
+      # `mode`: an audit trail a caller can reshape per-request is not one.
+      SOCRATIC_DATA_FLUSH: ${SOCRATIC_DATA_FLUSH:-on_close}
     ports:
       # Published to the host because the iframe fetches it from the learner's
       # browser, not from inside the compose network.
       - "8080:8080"
+    volumes:
+      # A bind mount rather than a named volume: reading a named volume needs
+      # `docker cp`, and a demonstration of collected data you cannot see is
+      # not one. The standing objection to bind mounts above is about *build
+      # output* differing across Mac, Windows and Linux — a data directory does
+      # not have that problem. Gitignored; it holds answer keys.
+      - ./data:/data
 
   open-webui:
     image: ghcr.io/open-webui/open-webui:main

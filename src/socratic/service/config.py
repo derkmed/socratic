@@ -6,7 +6,10 @@ thing that ever holds it is the `TokenMinter`.
 """
 
 import os
-from dataclasses import dataclass
+import pathlib
+from dataclasses import dataclass, field
+
+from socratic.adapters import collected_records
 
 MIN_SECRET_BYTES = 32
 """#18's floor. Shorter than the HMAC's own block size buys nothing and looks
@@ -18,6 +21,8 @@ SECRET_VAR = "SOCRATIC_TOKEN_SECRET"
 SERVICE_TOKEN_VAR = "SOCRATIC_SERVICE_TOKEN"
 TTL_VAR = "SOCRATIC_TOKEN_TTL_MILLIS"
 PUBLIC_URL_VAR = "SOCRATIC_PUBLIC_URL"
+DATA_DIR_VAR = "SOCRATIC_DATA_DIR"
+DATA_FLUSH_VAR = "SOCRATIC_DATA_FLUSH"
 
 DEFAULT_PUBLIC_URL = "http://localhost:8080"
 """Where the *browser* reaches this service, which is not where the Pipe does.
@@ -44,6 +49,16 @@ class ServiceConfig:
     service_token: str
     ttl_millis: int = DEFAULT_TTL_MILLIS
     public_base_url: str = DEFAULT_PUBLIC_URL
+    data_dir: pathlib.Path | None = None
+    """Where the collected records trail is written (#117, ADR-0018).
+
+    `None` - the variable unset - means no persistence at all: the wrappers are
+    simply not applied and the service behaves exactly as it did before, which
+    is why no existing test needs a temporary directory.
+    """
+    data_flush: collected_records.FlushCadence = field(
+        default=collected_records.FlushCadence.ON_CLOSE
+    )
 
     @classmethod
     def from_env(cls, env=None) -> "ServiceConfig":
@@ -75,11 +90,30 @@ class ServiceConfig:
                 "sends every answer to the host instead of here"
             )
 
+        data_dir = _data_dir(env.get(DATA_DIR_VAR))
+
+        raw_flush = env.get(DATA_FLUSH_VAR)
+        try:
+            flush = (
+                collected_records.FlushCadence.ON_CLOSE
+                if not raw_flush
+                else collected_records.FlushCadence(raw_flush)
+            )
+        except ValueError:
+            expected = ", ".join(
+                repr(value.value) for value in collected_records.FlushCadence
+            )
+            raise ConfigError(
+                f"{DATA_FLUSH_VAR} must be one of {expected}"
+            ) from None
+
         return cls(
             token_secret=secret,
             service_token=service_token,
             ttl_millis=ttl,
             public_base_url=public_url,
+            data_dir=data_dir,
+            data_flush=flush,
         )
 
     def __repr__(self) -> str:
@@ -88,3 +122,46 @@ class ServiceConfig:
             f"ServiceConfig(ttl_millis={self.ttl_millis}, "
             f"public_base_url={self.public_base_url!r}, secrets=<redacted>)"
         )
+
+
+def _data_dir(raw: str | None) -> pathlib.Path | None:
+    """The trail's root, created and proved writable, or `None` if unset.
+
+    Checked here because a *runtime* write failure is swallowed: it lands on the
+    request that seals a learner's quiz, and raising would cost them their last
+    answer to protect a demo artifact (ADR-0018). A startup failure has no
+    learner to protect, and setting the variable is a deliberate statement that
+    the records are wanted - so silently collecting nothing is precisely the
+    failure #117 exists to prevent.
+
+    The probe is a real write. `os.access` and the mode bits both lie under
+    enough circumstances - Windows ACLs, a read-only mount, a container running
+    as a user the host directory does not know - and this check earns its place
+    only by catching those.
+
+    Args:
+      raw: The variable's value, or `None`/empty for no persistence.
+
+    Returns:
+      The directory, or `None`.
+
+    Raises:
+      ConfigError: if the path is not a directory or cannot be written to.
+    """
+    if not raw:
+        return None
+    path = pathlib.Path(raw)
+    probe = path / ".socratic-write-probe"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+    except OSError as error:
+        raise ConfigError(
+            f"{DATA_DIR_VAR} must name a writable directory ({error.strerror})"
+        ) from None
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return path
