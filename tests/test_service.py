@@ -24,6 +24,7 @@ cadence. What is tested here is exactly what only exists once the routes exist:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 
@@ -153,10 +154,11 @@ def skeleton(payload) -> ModelResponse:
 class Harness:
     """The service, its collaborators, and the handles a test needs."""
 
-    def __init__(self, payload=None, *, clock=None, ttl_millis=60_000):
+    def __init__(self, payload=None, *, clock=None, ttl_millis=60_000, payloads_=None):
         self.clock = clock or Clock()
+        queued = payloads_ if payloads_ is not None else [payload or quiz_payload()]
         self.model = RecordingModelClient(
-            {CallType.AUTHOR_SKELETON: [skeleton(payload or quiz_payload())]}
+            {CallType.AUTHOR_SKELETON: [skeleton(one) for one in queued]}
         )
         self.attempts = InMemoryAttemptRepository()
         self.ratings = InMemoryRatingRepository()
@@ -880,3 +882,242 @@ class TestServiceConfig:
 
         assert "0123456789abcdef" not in repr(config)
         assert "redacted" in repr(config)
+
+
+# --- Learner settings (#14) --------------------------------------------------
+#
+# The settings value is tested in `test_learner_settings.py` and the cadence's
+# effect on probing in `test_session.py`. What only exists once the routes
+# exist is the *path*: how a `UserValves` change reaches a running attempt, and
+# what it is not allowed to touch on the way.
+
+from socratic.domain.modes import ProbeCadence  # noqa: E402
+
+SETTINGS_HEADERS = {"X-Socratic-Service-Token": SERVICE_TOKEN}
+
+
+TWO_BLANKS = ("b1", "b2")
+"""The Novice `blank_range` is 1-2, so this is the largest Novice quiz there
+is - and the smallest one in which "the next correct answer" is a different
+answer from the one just made."""
+
+
+def two_blank_novice_payload() -> dict:
+    return quiz_payload(blank_ids=TWO_BLANKS)
+
+
+def land_probe_questions(harness, session: str) -> None:
+    """Put a pre-authored probe question on every blank of a stored attempt.
+
+    A probe question arrives with the *pedagogy* payload (ADR-0011) and a blank
+    without one is never probed, so a cadence test needs one there. It is
+    written straight onto the stored attempt rather than fetched through
+    `author_pedagogy`, because that call is unreachable for an
+    HTTP-authored quiz today — it renders `quiz.mode.value`, and a mode that
+    arrived over the wire is the plain string `ModeKey` says it is (#75).
+    """
+    attempt = harness.attempts.get_by_session(LEARNER, session)
+    quiz = attempt.quiz
+    harness.attempts.save(
+        attempt.with_quiz(
+            dataclasses.replace(
+                quiz,
+                blanks=tuple(
+                    dataclasses.replace(
+                        blank, probe_question="How did you arrive at that?"
+                    )
+                    for blank in quiz.blanks
+                ),
+            )
+        )
+    )
+
+
+def advanced_payload() -> dict:
+    return quiz_payload(
+        blank_builder=advanced_blank_payload, blank_ids=ADVANCED_BLANK_IDS
+    )
+
+
+def set_settings(harness, **body) -> None:
+    response = harness.client.post("/settings", json=body, headers=SETTINGS_HEADERS)
+    assert response.status_code == 200, response.text
+
+
+def answer(harness, token: str, session: str, blank_id: str) -> dict:
+    response = harness.client.post(
+        "/answers",
+        json={
+            "quiz_session_id": session,
+            "blank_id": blank_id,
+            "submitted": CORRECT_OPTION_ID,
+        },
+        headers={"X-Socratic-Token": token},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+class TestTheSettingsRoute:
+    def test_it_records_the_learners_settings(self, harness):
+        set_settings(harness, learner_id=LEARNER, probe_cadence="off", mode="advanced")
+
+        stored = harness.deps.settings.get(LEARNER)
+        assert stored.probe_cadence is ProbeCadence.OFF
+        assert stored.mode == "advanced"
+
+    def test_it_needs_the_service_token(self, harness):
+        # The learner's own iframe must not be able to rewrite the settings of
+        # a learner it names: the two credentials are not interchangeable.
+        response = harness.client.post(
+            "/settings", json={"learner_id": LEARNER, "probe_cadence": "off"}
+        )
+
+        assert response.status_code == 401
+        assert harness.deps.settings.get(LEARNER) is None
+
+    def test_an_unknown_cadence_is_refused(self, harness):
+        response = harness.client.post(
+            "/settings",
+            json={"learner_id": LEARNER, "probe_cadence": "never"},
+            headers=SETTINGS_HEADERS,
+        )
+
+        assert response.status_code == 422
+        assert harness.deps.settings.get(LEARNER) is None
+
+    def test_it_replaces_the_document_rather_than_patching_it(self, harness):
+        # `UserValves` is read whole on the Pipe's side, so a setting the body
+        # omits is one the learner has not set. Merging instead would leave a
+        # learner who cleared a valve still carrying its old value.
+        set_settings(harness, learner_id=LEARNER, mode="advanced")
+        set_settings(harness, learner_id=LEARNER, probe_cadence="off")
+
+        stored = harness.deps.settings.get(LEARNER)
+        assert stored.probe_cadence is ProbeCadence.OFF
+        assert stored.mode == DifficultyMode.NOVICE
+
+    def test_authoring_records_the_settings_it_was_given(self, harness):
+        harness.author(probe_cadence="off")
+
+        assert harness.deps.settings.get(LEARNER).probe_cadence is ProbeCadence.OFF
+
+    def test_the_cadence_authored_under_is_stamped_on_the_attempt(self, harness):
+        body = harness.author(probe_cadence="off")
+
+        attempt = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert attempt.probe_cadence_at_authoring is ProbeCadence.OFF
+
+
+class TestChangingTheCadenceMidQuiz:
+    """Master spec acceptance 20, through the HTTP surface.
+
+    `QuizSession.submit` has taken a live cadence since #10; until the route
+    passed one the override was unreachable, so a learner's change could not
+    take effect until their next quiz.
+    """
+
+    @pytest.fixture
+    def playing(self):
+        """An attempt authored under `always`, with its pedagogy landed.
+
+        The pedagogy call is made through the domain rather than a route
+        because there is no route for it: it is fired off the render path and
+        is nobody's critical path (ADR-0011). It is here only because a probe
+        needs a pre-authored question to ask.
+        """
+        harness = Harness(two_blank_novice_payload())
+        body = harness.author(probe_cadence="always")
+        session = body["quiz_session_id"]
+        land_probe_questions(harness, session)
+        return harness, session, body["capability_token"]
+
+    def test_it_takes_effect_on_the_next_correct_answer(self, playing):
+        harness, session, token = playing
+        first = answer(harness, token, session, "b1")
+        assert first["probe"] is not None, "authored under `always`"
+
+        # The learner dismisses it, then turns probing off. Each response
+        # carries the token the next request must use: a rotated one stops
+        # verifying (D15).
+        dismissed = harness.client.post(
+            "/probes",
+            json={"quiz_session_id": session, "blank_id": "b1"},
+            headers={"X-Socratic-Token": first["capability_token"]},
+        )
+        assert dismissed.status_code == 200, dismissed.text
+        set_settings(harness, learner_id=LEARNER, probe_cadence="off")
+
+        second = answer(
+            harness, dismissed.json()["capability_token"], session, "b2"
+        )
+        assert second["probe"] is None
+
+    def test_a_probe_already_pending_is_unaffected(self, playing):
+        harness, session, token = playing
+        first = answer(harness, token, session, "b1")
+        assert first["probe"] is not None
+
+        set_settings(harness, learner_id=LEARNER, probe_cadence="off")
+
+        attempt = harness.attempts.get_by_session(LEARNER, session)
+        pending = [probe for probe in attempt.probes if not probe.is_answered]
+        assert len(pending) == 1
+        assert not pending[0].is_dismissed
+        assert not attempt.is_sealed, "a pending probe holds the attempt open"
+
+    def test_with_nothing_recorded_the_attempts_own_stamp_still_governs(self):
+        # A learner who has never touched their valves — and the whole of the
+        # behaviour before this ticket. The route must not substitute the
+        # defaults for the cadence the quiz was authored under, so the attempt
+        # here is made through the domain, leaving the settings unrecorded.
+        harness = Harness(two_blank_novice_payload())
+        quiz = harness.deps.authoring.author(
+            "Why does heat flow?",
+            LEARNER,
+            mode=DifficultyMode.NOVICE.value,
+            probe_cadence=ProbeCadence.OFF,
+        )
+        land_probe_questions(harness, quiz.quiz_session_id)
+        assert harness.deps.settings.get(LEARNER) is None
+
+        token = harness.mint_for(quiz.quiz_session_id)
+        assert answer(harness, token, quiz.quiz_session_id, "b1")["probe"] is None
+
+
+class TestTheModeToggleAppliesFromTheNextAuthoringCall:
+    """Master spec acceptance 40. One attempt, one mode."""
+
+    @pytest.fixture
+    def playing(self):
+        harness = Harness(payloads_=[two_blank_novice_payload(), advanced_payload()])
+        body = harness.author(mode=DifficultyMode.NOVICE.value)
+        return harness, body
+
+    def test_the_in_flight_attempts_mode_is_unchanged(self, playing):
+        harness, body = playing
+        before = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+
+        set_settings(harness, learner_id=LEARNER, mode=DifficultyMode.ADVANCED.value)
+        answer(harness, body["capability_token"], body["quiz_session_id"], "b1")
+
+        after = harness.attempts.get_by_session(LEARNER, body["quiz_session_id"])
+        assert after.mode == before.mode == DifficultyMode.NOVICE
+        assert after.quiz.blanks == before.quiz.blanks
+
+    def test_the_next_authoring_call_is_authored_in_the_new_mode(self, playing):
+        harness, _ = playing
+        set_settings(harness, learner_id=LEARNER, mode=DifficultyMode.ADVANCED.value)
+
+        second = harness.author(mode=DifficultyMode.ADVANCED.value)
+
+        attempt = harness.attempts.get_by_session(LEARNER, second["quiz_session_id"])
+        assert attempt.mode == DifficultyMode.ADVANCED
+
+    def test_the_answering_route_reads_no_mode_at_all(self):
+        # The structural half of "one attempt, one mode": there is no field on
+        # `AnswerRequest` for a mode to arrive in, and the request model
+        # forbids unknown fields, so a caller that tries is refused rather than
+        # having it silently dropped.
+        assert "mode" not in payloads.AnswerRequest.model_fields
+        assert payloads.AnswerRequest.model_config["extra"] == "forbid"
