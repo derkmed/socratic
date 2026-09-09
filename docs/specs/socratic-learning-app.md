@@ -230,9 +230,12 @@ sealing — optional, dismissible, never entering the conversation.
 
 A Pipe mapping `__user__` → `LearnerId`, calling the quiz service, returning the
 `HTMLResponse` it rendered with `Content-Disposition: inline`. It holds no domain
-logic and makes no model calls. **First thing to try:** that `fetch` actually
-reaches the service from the sandboxed, opaque-origin iframe on a default install.
-The source says it should; it has not been observed.
+logic and makes no model calls. The `fetch` this depends on **has been observed**,
+not merely read: a spike reached a stub service from a `srcdoc` iframe sandboxed
+without `allow-same-origin`, in Chrome and Edge, with `Origin: null` and both
+`POST`s preflighted (`docs/research/open-webui-fit.md`). What is still unobserved is
+the composition — this Pipe, inside a real default install, reaching the real quiz
+service, which is acceptance 34.
 
 ## Out of scope
 
