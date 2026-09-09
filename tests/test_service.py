@@ -1285,6 +1285,76 @@ class TestAQuizAuthoredOverHttp:
         assert payloads.blank_body(blank, registry)["mode"] == "expert"
 
 
+# --- An unregistered mode (#101) ---------------------------------------------
+
+
+class TestAnUnregisteredMode:
+    """A mode no registry entry exists for is a **422 naming the field**, not a
+    404 (#101).
+
+    The refusal itself was always right and always in the right place — the
+    registry raises before any model call — but "not found" is what a stale
+    session says, and a Pipe could not tell the two apart. Only the status
+    changed: the sentence is the registry's, in the shape the neighbouring
+    `probe_cadence` refusal already uses.
+    """
+
+    def author_expert(self, harness, route="/quizzes"):
+        return harness.client.post(
+            route,
+            json={"learner_id": LEARNER, "inquiry": "why?", "mode": "expert"},
+            headers={"X-Socratic-Service-Token": SERVICE_TOKEN},
+        )
+
+    def test_it_names_the_mode_and_the_modes_there_are(self, harness):
+        response = self.author_expert(harness)
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "unknown mode: 'expert'; expected one of 'novice', 'advanced'"
+        )
+
+    def test_it_is_refused_before_any_model_call(self, harness):
+        self.author_expert(harness)
+
+        harness.model.assert_never_called()
+
+    def test_the_overlay_route_refuses_it_the_same_way(self, harness):
+        response = self.author_expert(harness, route="/overlays")
+
+        assert response.status_code == 422
+        assert "expert" in response.json()["detail"]
+
+    def test_a_missing_thing_is_still_a_404(self, authored):
+        # The other half of the distinction: a `KeyError` that really is "no
+        # such thing" — here a blank the quiz does not have — keeps the status
+        # it had. Neither refusal is readable if both are 404.
+        harness, quiz, token = authored
+
+        response = harness.client.post(
+            "/answers",
+            json={
+                "quiz_session_id": quiz["quiz_session_id"],
+                "blank_id": "b99",
+                "submitted": CORRECT_OPTION_ID,
+            },
+            headers={"X-Socratic-Token": token},
+        )
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "not found"}
+
+    def test_the_settings_route_still_carries_a_mode_it_has_not_heard_of(
+        self, harness
+    ):
+        # The seam is unchanged: mode is carried, not validated, above the
+        # registry (CONTEXT: LearnerSettings). The 422 is the *authoring*
+        # call's refusal translated at the edge, not a second opinion here.
+        set_settings(harness, learner_id=LEARNER, mode="expert")
+
+        assert harness.deps.settings.get(LEARNER).mode == "expert"
+
+
 # --- The intake reaches HTTP (#92) -------------------------------------------
 
 
@@ -1575,73 +1645,3 @@ class TestTheIntakeIsWiredWithoutBeingAskedFor:
         rendered = json.dumps(queued)
         assert SENTINEL_HINT not in rendered
         assert CORRECT_OPTION_ID not in rendered
-
-
-# --- An unregistered mode (#101) ---------------------------------------------
-
-
-class TestAnUnregisteredMode:
-    """A mode no registry entry exists for is a **422 naming the field**, not a
-    404 (#101).
-
-    The refusal itself was always right and always in the right place — the
-    registry raises before any model call — but "not found" is what a stale
-    session says, and a Pipe could not tell the two apart. Only the status
-    changed: the sentence is the registry's, in the shape the neighbouring
-    `probe_cadence` refusal already uses.
-    """
-
-    def author_expert(self, harness, route="/quizzes"):
-        return harness.client.post(
-            route,
-            json={"learner_id": LEARNER, "inquiry": "why?", "mode": "expert"},
-            headers={"X-Socratic-Service-Token": SERVICE_TOKEN},
-        )
-
-    def test_it_names_the_mode_and_the_modes_there_are(self, harness):
-        response = self.author_expert(harness)
-
-        assert response.status_code == 422
-        assert response.json()["detail"] == (
-            "unknown mode: 'expert'; expected one of 'novice', 'advanced'"
-        )
-
-    def test_it_is_refused_before_any_model_call(self, harness):
-        self.author_expert(harness)
-
-        harness.model.assert_never_called()
-
-    def test_the_overlay_route_refuses_it_the_same_way(self, harness):
-        response = self.author_expert(harness, route="/overlays")
-
-        assert response.status_code == 422
-        assert "expert" in response.json()["detail"]
-
-    def test_a_missing_thing_is_still_a_404(self, authored):
-        # The other half of the distinction: a `KeyError` that really is "no
-        # such thing" — here a blank the quiz does not have — keeps the status
-        # it had. Neither refusal is readable if both are 404.
-        harness, quiz, token = authored
-
-        response = harness.client.post(
-            "/answers",
-            json={
-                "quiz_session_id": quiz["quiz_session_id"],
-                "blank_id": "b99",
-                "submitted": CORRECT_OPTION_ID,
-            },
-            headers={"X-Socratic-Token": token},
-        )
-
-        assert response.status_code == 404
-        assert response.json() == {"detail": "not found"}
-
-    def test_the_settings_route_still_carries_a_mode_it_has_not_heard_of(
-        self, harness
-    ):
-        # The seam is unchanged: mode is carried, not validated, above the
-        # registry (CONTEXT: LearnerSettings). The 422 is the *authoring*
-        # call's refusal translated at the edge, not a second opinion here.
-        set_settings(harness, learner_id=LEARNER, mode="expert")
-
-        assert harness.deps.settings.get(LEARNER).mode == "expert"
