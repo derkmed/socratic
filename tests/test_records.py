@@ -400,20 +400,25 @@ class TestSealing:
         # The structural half of #46. A `with_*` sibling added later without
         # `_refuse_if_sealed` fails here; one added without an entry in this
         # table fails here too, so the guard cannot be forgotten quietly.
+        # Values are the full argument tuple, so a mutator taking more than
+        # one argument still goes through the same guard.
         arguments = {
-            "with_guess": _guess(),
-            "with_probe": _probe(),
-            "with_model_call": ModelCallRecord(
-                call_type="author_pedagogy",
-                message_id="msg_01pedagogy",
-                usage=TokenUsage(
-                    input_tokens=0,
-                    output_tokens=0,
-                    cache_creation_input_tokens=0,
-                    cache_read_input_tokens=0,
+            "with_guess": (_guess(),),
+            "with_probe": (_probe(),),
+            "with_model_call": (
+                ModelCallRecord(
+                    call_type="author_pedagogy",
+                    message_id="msg_01pedagogy",
+                    usage=TokenUsage(
+                        input_tokens=0,
+                        output_tokens=0,
+                        cache_creation_input_tokens=0,
+                        cache_read_input_tokens=0,
+                    ),
                 ),
             ),
-            "with_quiz": _quiz(),
+            "with_quiz": (_quiz(),),
+            "with_probe_resolved": (0, _probe()),
         }
         mutators = {
             name
@@ -423,9 +428,9 @@ class TestSealing:
         assert mutators == set(arguments)
 
         sealed = _attempt().sealed(LATER)
-        for name, argument in arguments.items():
+        for name, args in arguments.items():
             with pytest.raises(ValueError, match="sealed"):
-                getattr(sealed, name)(argument)
+                getattr(sealed, name)(*args)
 
     def test_a_sealed_attempt_is_still_reconstructible_field_for_field(self):
         # Deliberate, and the reason the `dataclasses.replace` route stays
