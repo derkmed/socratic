@@ -14,6 +14,7 @@ Two rules, both load-bearing from the first commit rather than asserted later:
 """
 
 import ast
+import os
 import pathlib
 import subprocess
 import sys
@@ -157,6 +158,32 @@ def test_the_domain_module_discovery_covers_the_package():
     assert strays == [], f"the walk escaped the domain package: {strays}"
 
 
+def _run_in_a_child_interpreter(code: str) -> subprocess.CompletedProcess:
+    """Run `code` in a child interpreter rooted at the project.
+
+    Both ends of the pipe are pinned to UTF-8, because the value this returns
+    is read only when the guard fails, and what it holds then is a traceback
+    quoting em-dashed domain source (#43). `encoding` settles the parent's
+    decode; `PYTHONIOENCODING` settles the child's encode, which would
+    otherwise be the locale's codec or whatever the ambient environment last
+    said. Pinning one end alone is worse than pinning neither: the two
+    locale-derived defaults at least agree with each other, whereas a UTF-8
+    decoder over cp1252 bytes raises inside subprocess's reader thread and
+    leaves `stderr` as `None`. `errors="replace"` is the same argument once
+    more — for a string read only to explain a failure, mangled beats absent.
+    """
+    environ = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(SOURCE_ROOT.parents[1]),
+        env=environ,
+    )
+
+
 def test_the_domain_imports_with_no_sdk_installed():
     # Belt and braces over the AST scan: import the domain in a subprocess
     # whose meta path refuses `anthropic` outright, so a lazy, conditional or
@@ -179,10 +206,26 @@ def test_the_domain_imports_with_no_sdk_installed():
         f"for name in {modules!r}:\n"
         "    importlib.import_module(name)\n"
     )
-    result = subprocess.run(
-        [sys.executable, "-c", guard],
-        capture_output=True,
-        text=True,
-        cwd=str(SOURCE_ROOT.parents[1]),
-    )
+    result = _run_in_a_child_interpreter(guard)
     assert result.returncode == 0, result.stderr
+
+
+def test_the_child_interpreter_reports_non_ascii_diagnostics_intact(monkeypatch):
+    # The guard above reads `stderr` only when it fails, and what it reads
+    # then is a traceback printing the *source lines* of the frames it walked
+    # — domain source, which is full of em dashes (#43).
+    #
+    # Both ends of that pipe pick a codec, and left alone both pick the
+    # locale's, which is why the mangling does not show up on an untouched
+    # machine. `PYTHONIOENCODING` moves the child's end and not the parent's,
+    # and it is exactly the variable people set on Windows to get UTF-8 out of
+    # Python. A codec that agrees with no locale makes the mismatch visible
+    # wherever the suite runs.
+    monkeypatch.setenv("PYTHONIOENCODING", "utf-16")
+
+    result = _run_in_a_child_interpreter(
+        "raise AssertionError('the domain \\u2014 imported the SDK')"
+    )
+
+    assert result.returncode != 0
+    assert "the domain — imported the SDK" in result.stderr
