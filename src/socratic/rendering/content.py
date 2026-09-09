@@ -30,7 +30,7 @@ BLANK_CLASS = "socratic-blank"
 
 A neutral placeholder, deliberately: whether a blank is an option bank or a
 text input is `ModePolicy.render_hint`'s decision, and it belongs where the
-control is built (issue #19), not in a renderer that would have to branch on
+control is built (issue #13), not in a renderer that would have to branch on
 mode to know.
 """
 
