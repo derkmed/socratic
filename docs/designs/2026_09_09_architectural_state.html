@@ -178,7 +178,10 @@ flowchart TB
     <code>/overlays</code>, <code>/answers</code>, <code>/probes</code>, <code>/settings</code>,
     <code>/displacements</code>, <code>/ratings</code>.</li>
     <li><strong>QuizAuthoring</strong> &mdash; mints the ULID <code>QuizSessionId</code>, then two
-    model calls: skeleton, then pedagogy.</li>
+    model calls. Only the first is on the learner&rsquo;s path: the skeleton is playable on its own,
+    so the pedagogy call is fired as a background task <em>after</em> the response has gone
+    (ADR-0011). Its failure costs the hints and the recap, never the quiz &mdash; and it is logged,
+    because a silently dropped payload is a failure that hides.</li>
     <li><strong>QuizSession</strong> &mdash; grading, the three-rung hint ladder, probe cadence,
     sealing. Its model calls are dashed because <strong>only Advanced makes them</strong>: Novice
     feedback is wholly pre-authored, so a Novice answer costs zero model calls.</li>
