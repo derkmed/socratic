@@ -237,12 +237,14 @@ def _validate_advanced_pedagogy(blank: Blank) -> tuple[str, ...]:
     Its feedback is the reactive tutor line on the grading response and its
     probe question a nullable field on the same (ADR-0013, ADR-0011), so the
     payload carries only the quiz-level recap. The stage still exists, and
-    still refuses fields Advanced does not own.
+    still refuses fields Advanced does not own - `probe_question` among them,
+    because an Advanced probe question is authored *during* grading and a
+    pre-authored one would be a second, stale source for the same string.
     """
     _require_mode(blank, DifficultyMode.ADVANCED)
     return tuple(
         f"an advanced blank carries no {name}"
-        for name in ("reinforcement", "hints")
+        for name in ("reinforcement", "hints", "probe_question")
         if getattr(blank, name) is not None
     )
 
@@ -287,6 +289,7 @@ _NOVICE_SCHEMA_FRAGMENT: Mapping[str, object] = {
         "correct_option_id": {"type": "string"},
         "reinforcement": {"type": "string"},
         "hints": {"type": "array", "items": {"type": "string"}},
+        "probe_question": {"type": ["string", "null"]},
         "rubric": {"type": ["string", "null"]},
     },
     "required": [
@@ -295,6 +298,7 @@ _NOVICE_SCHEMA_FRAGMENT: Mapping[str, object] = {
         "correct_option_id",
         "reinforcement",
         "hints",
+        "probe_question",
         "rubric",
     ],
     "additionalProperties": False,
@@ -308,6 +312,7 @@ _ADVANCED_SCHEMA_FRAGMENT: Mapping[str, object] = {
         "correct_option_id": {"type": ["string", "null"]},
         "reinforcement": {"type": ["string", "null"]},
         "hints": {"type": ["array", "null"], "items": {"type": "string"}},
+        "probe_question": {"type": ["string", "null"]},
         "rubric": {"type": "string"},
     },
     "required": [
@@ -316,6 +321,7 @@ _ADVANCED_SCHEMA_FRAGMENT: Mapping[str, object] = {
         "correct_option_id",
         "reinforcement",
         "hints",
+        "probe_question",
         "rubric",
     ],
     "additionalProperties": False,
@@ -354,10 +360,20 @@ _NOVICE_PEDAGOGY_FRAGMENT: Mapping[str, object] = {
         **_BLANK_ID,
         "reinforcement": {"type": "string"},
         "hints": {"type": "array", "items": {"type": "string"}},
+        "probe_question": {"type": ["string", "null"]},
     },
-    "required": ["blank_id", "reinforcement", "hints"],
+    "required": ["blank_id", "reinforcement", "hints", "probe_question"],
     "additionalProperties": False,
 }
+"""The pedagogy call is where a Novice probe question is authored (ADR-0011),
+alongside the hint ladder it is a peer of - which is what makes *asking* a probe
+free on the deterministic path.
+
+Required *and* nullable, the house style here for a field the model may have
+nothing to say about: `strict: true` keeps the key present, and a null says this
+blank carries no question. `_validate_novice_pedagogy` therefore does not demand
+one, for the same reason `session._hint_for_rung` tolerates a short ladder - a
+blank whose pedagogy is late costs the learner the probe, not the verdict."""
 
 _ADVANCED_SKELETON_FRAGMENT: Mapping[str, object] = {
     "type": "object",

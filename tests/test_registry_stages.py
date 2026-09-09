@@ -142,6 +142,25 @@ class TestTheNoviceStages:
             NOVICE_POLICY, AuthoringStage.PEDAGOGY, novice_blank(reinforcement=None)
         )
 
+    def test_the_pedagogy_stage_takes_a_probe_question_without_demanding_one(self):
+        # ADR-0011 puts the Novice probe question in this payload, and the #9
+        # window is why it is not demanded: a blank whose pedagogy is late
+        # costs the learner the probe, not the verdict.
+        assert (
+            validate(
+                NOVICE_POLICY,
+                AuthoringStage.PEDAGOGY,
+                novice_blank(probe_question="How did you arrive at that?"),
+            )
+            == ()
+        )
+        assert (
+            validate(
+                NOVICE_POLICY, AuthoringStage.PEDAGOGY, novice_blank(probe_question=None)
+            )
+            == ()
+        )
+
     def test_the_pedagogy_stage_has_no_opinion_about_the_option_bank(self):
         # The skeleton already settled the bank; asking twice would report the
         # same problem twice on a merged quiz.
@@ -177,6 +196,17 @@ class TestTheAdvancedStages:
             ADVANCED_POLICY, AuthoringStage.PEDAGOGY, advanced_blank(hints=HINTS)
         )
         assert any("hints" in error for error in errors)
+
+    def test_advanced_carries_no_pre_authored_probe_question(self):
+        # #10 / ADR-0011: an Advanced probe question is authored during grading
+        # and rides the `grade_answer` response, so a pre-authored one on the
+        # blank would be a second, stale source for the same string.
+        errors = validate(
+            ADVANCED_POLICY,
+            AuthoringStage.PEDAGOGY,
+            advanced_blank(probe_question="How did you arrive at that?"),
+        )
+        assert any("probe_question" in error for error in errors)
 
 
 class TestTheDecomposition:
@@ -232,7 +262,14 @@ class TestTheSchemaFragments:
             ]
         )
 
-        assert required == {"blank_id", "reinforcement", "hints"}
+        # `probe_question` joined the payload with #10: a Novice probe question
+        # is pre-authored per blank exactly as the hint rungs are (ADR-0011).
+        assert required == {
+            "blank_id",
+            "reinforcement",
+            "hints",
+            "probe_question",
+        }
 
     def test_the_advanced_skeleton_fragment_requires_the_rubric(self):
         required = set(

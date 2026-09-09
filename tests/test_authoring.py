@@ -613,6 +613,7 @@ def pedagogy_payload(blank_ids=("b1",), **overrides) -> dict:
             {
                 "blank_id": blank_id,
                 "reinforcement": "Entropy is the one that never decreases.",
+                "probe_question": "How did you arrive at that?",
                 "hints": [
                     "Think about disorder.",
                     "It is the quantity the second law bounds.",
@@ -771,6 +772,24 @@ class TestThePedagogyPayloadLanding:
         )
         assert attempt.quiz.blanks[0].reinforcement
         assert attempts.list_for_learner(LEARNER)[0] == attempt
+
+    def test_the_pre_authored_probe_question_rides_the_payload(self):
+        # ADR-0011: a Novice probe question is pre-authored per blank exactly
+        # as the hint rungs are, which is the whole of "asking a probe costs no
+        # model call" on the deterministic path (#10).
+        _, attempt, _, _ = author_both()
+
+        assert attempt.quiz.blanks[0].probe_question == "How did you arrive at that?"
+
+    def test_a_payload_with_no_probe_question_is_tolerated(self):
+        # The #9 window again: a late or partial payload costs the learner the
+        # probe, not the verdict.
+        payload = pedagogy_payload()
+        del payload["blanks"][0]["probe_question"]
+        _, attempt, _, _ = author_both(pedagogy=payload)
+
+        assert attempt.quiz.blanks[0].probe_question is None
+        assert authoring.validation.validate_quiz(attempt.quiz) == ()
 
     def test_the_merged_quiz_validates_as_complete(self):
         _, attempt, _, _ = author_both()

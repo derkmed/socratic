@@ -619,7 +619,12 @@ def _pedagogy_entries(
 
 
 def _with_pedagogy(blank: Blank, entry: Mapping[str, Any] | None) -> Blank:
-    """One blank, with its reinforcement and hint ladder filled in."""
+    """One blank, with its reinforcement, hint ladder and probe question in.
+
+    The probe question is merged on the same terms as the hints: pre-authored
+    per blank (ADR-0011), and absent rather than fatal when the payload does
+    not carry one.
+    """
     if entry is None:
         return blank
     where = f"the pedagogy for blank {blank.blank_id!r}"
@@ -628,4 +633,5 @@ def _with_pedagogy(blank: Blank, entry: Mapping[str, Any] | None) -> Blank:
         blank,
         reinforcement=_optional(entry, "reinforcement", str, where),
         hints=None if hints is None else tuple(_hint(hint, where) for hint in hints),
+        probe_question=_optional(entry, "probe_question", str, where),
     )
