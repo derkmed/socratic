@@ -267,12 +267,9 @@ class QuizAuthoring:
 
         merged = _merge_pedagogy(attempt.quiz, _decode(response.content))
         validation.ensure_valid_quiz(merged, self._registry, stage=COMPLETE_STAGE)
-        merged_attempt = dataclasses.replace(
-            attempt.with_model_call(
-                _call_record(prompting.CallType.AUTHOR_PEDAGOGY, response)
-            ),
-            quiz=merged,
-        )
+        merged_attempt = attempt.with_model_call(
+            _call_record(prompting.CallType.AUTHOR_PEDAGOGY, response)
+        ).with_quiz(merged)
         self._attempts.save(merged_attempt)
         return merged_attempt
 
