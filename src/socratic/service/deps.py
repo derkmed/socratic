@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from socratic.domain import ids, repositories
 from socratic.domain.authoring import QuizAuthoring
+from socratic.domain.inquiry import InquiryIntake
 from socratic.domain.registry import ModeRegistry, default_registry
 from socratic.domain.session import QuizSession
 from socratic.domain.tokens import TokenMinter
@@ -39,6 +40,14 @@ class ServiceDependencies:
     never records any settings behaves exactly as it did before the field
     existed, because the answering path falls back to the attempt's own
     `probe_cadence_at_authoring`."""
+    intake: InquiryIntake = None  # type: ignore[assignment]
+    """The door an inquiry arrives at (#92, `domain/inquiry.py`).
+
+    Defaulted rather than required, like `registry` and `settings`, because it
+    is wholly determined by the `authoring` and `attempts` already on this
+    record - so no existing construction, `__main__.build_app` included, has to
+    learn about it. It is a field rather than a property only so a test can
+    substitute one."""
     registry: ModeRegistry = None  # type: ignore[assignment]
     clock: ids.Clock = ids.system_clock
     public_base_url: str = DEFAULT_PUBLIC_URL
@@ -52,6 +61,12 @@ class ServiceDependencies:
         if self.settings is None:
             object.__setattr__(
                 self, "settings", repositories.InMemoryLearnerSettingsRepository()
+            )
+        if self.intake is None:
+            object.__setattr__(
+                self,
+                "intake",
+                InquiryIntake(authoring=self.authoring, attempts=self.attempts),
             )
         if not self.service_token:
             raise ValueError("the service token must not be empty")
