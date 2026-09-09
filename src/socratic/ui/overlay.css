@@ -92,9 +92,11 @@ body {
   cursor: pointer;
 }
 
-/* An option's text arrives as sanitised Markdown, which is block-level: a
- * `<p>` inside a button would otherwise stack instead of reading as a label. */
-.socratic-option p,
+/* The verdict and the probe question are `html_of` output — block-level, a
+ * whole `<p>` for one sentence — and the panel they sit in supplies its own
+ * box. An option's label is not here: it comes through `payloads.label_html`,
+ * which emits no `<p>` for a phrase (#98), so the button styles a label rather
+ * than flattening a paragraph. */
 .socratic-verdict p:last-child,
 .socratic-probe-question p {
   display: inline;

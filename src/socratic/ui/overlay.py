@@ -19,9 +19,10 @@ Two other rules the tests hold this module to:
   fragment it inserts was sanitised in this process before it left.
 
 Nothing here re-sanitises: `explanation_html`, `recap_html`, `text_html` and
-`answer_html` all left `payloads.html_of` or `content.render_explanation`
-already sanitised, and a second pass over the finished document would strip the
-buttons, the inputs and the script this module exists to add.
+`answer_html` all left `payloads.html_of`, `payloads.label_html` or
+`content.render_explanation` already sanitised, and a second pass over the
+finished document would strip the buttons, the inputs and the script this
+module exists to add.
 """
 
 import html

@@ -1575,3 +1575,64 @@ class TestTheIntakeIsWiredWithoutBeingAskedFor:
         rendered = json.dumps(queued)
         assert SENTINEL_HINT not in rendered
         assert CORRECT_OPTION_ID not in rendered
+
+
+# --- Option labels (#98) -----------------------------------------------------
+
+
+class TestAnOptionLabelIsInline:
+    """An option's `text_html` is a label, not a document (#98).
+
+    `html_of` is the block render: `html_of("entropy")` is `<p>entropy</p>`. The
+    client copies an option's markup into the blank's placeholder when the blank
+    resolves, and the placeholder is an inline-block span sitting in the middle
+    of a sentence — so that `<p>`, and the UA's paragraph margins with it, used
+    to land there. `label_html` renders a label that is a phrase inline; a label
+    carrying real block content still block-renders, because inline-rendering a
+    fenced block would mangle it into a single line.
+    """
+
+    def _labels(self, *texts: str) -> list[str]:
+        blank = types.Blank(
+            blank_id="b1",
+            mode=DifficultyMode.NOVICE,
+            options=tuple(
+                types.Option(option_id=f"o{index}", text=text)
+                for index, text in enumerate(texts, start=1)
+            ),
+            correct_option_id="o1",
+        )
+        options = payloads.blank_body(blank, default_registry())["options"]
+        return [option["text_html"] for option in options]
+
+    def test_a_one_word_label_carries_no_paragraph_wrapper(self):
+        assert self._labels("entropy") == ["entropy"]
+
+    def test_a_label_keeps_the_inline_subset(self):
+        assert self._labels("the **second** law") == [
+            "the <strong>second</strong> law"
+        ]
+
+    def test_a_label_that_is_a_block_stays_a_block(self):
+        source = "```python\nreturn 1\n```"
+
+        label = self._labels(source)[0]
+
+        assert label == payloads.html_of(source)
+        assert "<pre" in label
+
+    def test_a_label_is_sanitised_like_everything_else_on_the_wire(self):
+        label = self._labels("<script>alert(1)</script>")[0]
+
+        assert "<script" not in label
+        assert "&lt;script&gt;" in label
+
+    def test_every_option_of_an_authored_quiz_reaches_the_wire_unwrapped(
+        self, harness
+    ):
+        """The whole path, not just the helper: what `/quizzes` hands the
+        overlay is what the client copies into the placeholder."""
+        body = harness.author()
+
+        for option in body["blanks"][0]["options"]:
+            assert "<p>" not in option["text_html"], option

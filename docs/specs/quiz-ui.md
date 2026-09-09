@@ -105,14 +105,27 @@ its own.
 - `client.js` inlined, then one call to `SocraticQuiz.mount(document)`.
 
 **Why the controls are a panel rather than markup inside the placeholder span.**
-An option's `text_html` is block-level — `render_markdown("entropy")` is
-`<p>entropy</p>` — and a block box inside the inline placeholder splits the very
-line it was supposed to sit in. So the placeholder keeps its inline gap and the
-control sits in a block panel under the explanation, one blank at a time. The
-blank is still drawn inline where the walk put it, which is what the criterion
-asks; the control is under it rather than in it. When a blank resolves the
-client fills its gap, so a finished quiz reads as a complete sentence rather
-than as a page of holes.
+Not because of what an option's text renders to — that premise is gone (#98,
+below) — but because of what a control *is*. An option bank is a row of buttons
+with a prompt above it, and a text input is a field and a submit button: boxes
+with padding and borders, sized to be pressed, and any of them dropped into the
+inline placeholder splits the very line it was supposed to sit in. So the
+placeholder keeps its inline gap and the control sits in a block panel under the
+explanation, one blank at a time. The blank is still drawn inline where the walk
+put it, which is what the criterion asks; the control is under it rather than in
+it. When a blank resolves the client fills its gap, so a finished quiz reads as
+a complete sentence rather than as a page of holes.
+
+**And what fills that gap is inline.** An option's `text_html` used to be
+block-level — `html_of("entropy")` was `<p>entropy</p>` — so the markup the
+client copies into the resolved placeholder was a block `<p>`, with the UA's
+paragraph margins, sitting in the middle of a sentence (#98). An option now
+comes through `payloads.label_html`, which renders a label that is a phrase as
+a fragment (`markdown.render_fragment`, added in #86) and still block-renders a
+label that carries real block content. The panel styles its own box, as it
+already did — the button was never asking the Markdown renderer for one — and
+the overlay's `.socratic-option p { display: inline }` workaround comes out with
+the `<p>` it was flattening.
 
 The stylesheet used to flow the explanation's direct-child paragraphs inline,
 for the same reason: `render_markdown` wrapped every text segment in its own
