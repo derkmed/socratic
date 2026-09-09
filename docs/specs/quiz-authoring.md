@@ -5,6 +5,12 @@ spec's [section 6](socratic-learning-app.md) to the **skeleton call only**;
 splitting authoring into skeleton plus pedagogy payload is
 [#9](https://github.com/derkmed/socratic/issues/9).
 
+**Superseded in part by**
+[`skeleton-and-pedagogy-split.md`](skeleton-and-pedagogy-split.md), which adds
+the second call. The out-of-scope note below - that the skeleton response has
+to carry the full blank shape because the conditional validator would otherwise
+refuse it - is exactly what that spec removes.
+
 ## Goal
 
 The single entry point to the authoring path: a learner's inquiry goes in, and

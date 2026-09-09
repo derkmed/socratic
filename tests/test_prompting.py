@@ -32,9 +32,16 @@ from socratic.domain.types import Blank, BlankSegment, Option, Quiz, TextSegment
 
 PROMPTING_SOURCE_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "socratic"
 
-EXEMPT_FROM_PROFILE_SCAN = ("domain/prompting.py",)
-"""The module that owns the only reads, named by path relative to the package
-root rather than by filename — see #23 for the same fault in the mode scan."""
+EXEMPT_FROM_PROFILE_SCAN = ("domain/prompting.py", "domain/profile_builder.py")
+"""The two modules that own the profile, named by path relative to the package
+root rather than by filename — see #23 for the same fault in the mode scan.
+
+`prompting.py` is the sole **reader for rendering**; `profile_builder.py` (#16)
+is the sole **writer**, and cannot increment a ledger or fold a narrative
+forward without reading them. Those are the two ends the abstraction has always
+implied — a profile is written in one place and rendered in one place — and
+everything in between still reaches a profile through `render_profile` alone.
+"""
 
 PROFILE_INTERNALS = ("ledger", "narrative")
 """The shape-bearing fields the abstraction exists to hide.
@@ -456,6 +463,17 @@ class TestTheProfileInternalsScanItself:
             "domain/repositories.py",
             "self._profiles[profile.learner_id] = profile\n",
         ) == []
+
+    def test_the_builder_s_bookkeeping_is_not_an_internal(self):
+        # The unified profile (#36) also carries `watermark` and `updated_at`.
+        # Neither is shape-bearing for rendering — the watermark says how far
+        # `ProfileBuilder` has read, and #16 has to read it to advance it.
+        # Forbidding that would repeat #30: a guard that stops the profile
+        # being used for the thing it exists for.
+        for field in ("watermark", "updated_at"):
+            assert _scan_snippet(
+                "domain/builder.py", f"since = profile.{field}\n"
+            ) == []
 
     def test_the_owning_module_may_read_them(self):
         for field in PROFILE_INTERNALS:

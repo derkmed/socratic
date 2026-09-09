@@ -16,9 +16,9 @@ import pytest
 
 from socratic.domain.ids import Ulid
 from socratic.domain.modes import DifficultyMode, GradingStrategy, ProbeCadence
+from socratic.domain.profiles import LearnerProfile
 from socratic.domain.records import (
     Guess,
-    LearnerProfile,
     Outcome,
     QuizAttempt,
     RatingRecord,
@@ -240,12 +240,17 @@ class TestLearnerProfileRepository:
         profiles = InMemoryLearnerProfileRepository()
         profile = LearnerProfile(
             learner_id="learner-1",
+            ledger={"topics/entropy": 4, "weak/free-energy": 2},
             narrative="Comfortable with entropy.",
             watermark=str(Ulid.mint()),
             updated_at=LATER,
         )
         profiles.save(profile)
-        assert profiles.get("learner-1") == profile
+        stored = profiles.get("learner-1")
+        assert stored == profile
+        # Both halves of D8 survive the round trip: before #36 the store held a
+        # profile with no ledger at all.
+        assert stored.ledger == {"topics/entropy": 4, "weak/free-energy": 2}
 
     def test_a_learner_with_no_profile_reads_none(self):
         assert InMemoryLearnerProfileRepository().get("learner-1") is None

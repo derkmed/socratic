@@ -111,11 +111,62 @@ def test_anthropic_is_declared_as_an_optional_extra():
     assert any(spec.startswith("anthropic") for spec in extras["anthropic"])
 
 
+def _domain_module_names() -> list[str]:
+    """Every importable module in the domain package, discovered not listed.
+
+    Walks `SOURCE_ROOT / DOMAIN_PACKAGE` instead of naming modules, so the
+    guard below grows with the package the way the AST scans already do. The
+    hardcoded list it replaces had gone stale three modules behind (#28).
+
+    Confining the walk to the domain package is also what keeps the rest of
+    `socratic` out of it: `socratic.adapters` legitimately imports the SDK
+    (see `ANTHROPIC_ADAPTER`), and sibling packages outside the seam may carry
+    third-party dependencies the guard has no business importing.
+
+    `__pycache__` entries and stems that are not Python identifiers are not
+    importable modules and are skipped; `__init__.py` names its package.
+    """
+    names: set[str] = set()
+    for path in (SOURCE_ROOT / DOMAIN_PACKAGE).rglob("*.py"):
+        parts = path.relative_to(SOURCE_ROOT).with_suffix("").parts
+        if "__pycache__" in parts:
+            continue
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        if not all(part.isidentifier() for part in parts):
+            continue
+        names.add(".".join(("socratic",) + parts))
+    return sorted(names)
+
+
+def test_the_domain_module_discovery_covers_the_package():
+    # The guard below is worth exactly what this walk returns, and a walk that
+    # quietly returned nothing would make it vacuous — so pin the shape here:
+    # the package itself, a module known to exist, and nothing outside the
+    # domain, which is where the SDK is allowed to live.
+    domain = f"socratic.{DOMAIN_PACKAGE}"
+    names = _domain_module_names()
+    assert domain in names
+    assert f"{domain}.ids" in names
+    assert len(names) > 1, names
+    strays = [
+        name
+        for name in names
+        if name != domain and not name.startswith(f"{domain}.")
+    ]
+    assert strays == [], f"the walk escaped the domain package: {strays}"
+
+
 def test_the_domain_imports_with_no_sdk_installed():
-    # Belt and braces over the AST scan: import the package in a subprocess
-    # whose meta path refuses `anthropic` outright, so a lazy or conditional
-    # import would still be caught.
+    # Belt and braces over the AST scan: import the domain in a subprocess
+    # whose meta path refuses `anthropic` outright, so a lazy, conditional or
+    # dynamically named import would still be caught. Every module in the
+    # package is imported — the check the AST cannot do is worth little if it
+    # covers only the modules someone remembered to list.
+    modules = _domain_module_names()
+    assert modules, "no domain modules discovered; the guard would be vacuous"
     guard = (
+        "import importlib\n"
         "import sys\n"
         "class Refuse:\n"
         "    def find_module(self, name, path=None):\n"
@@ -125,8 +176,8 @@ def test_the_domain_imports_with_no_sdk_installed():
         "    def find_spec(self, name, path=None, target=None):\n"
         "        return self.find_module(name, path)\n"
         "sys.meta_path.insert(0, Refuse())\n"
-        "import socratic.domain.ids, socratic.domain.modes\n"
-        "import socratic.domain.types, socratic.domain.registry\n"
+        f"for name in {modules!r}:\n"
+        "    importlib.import_module(name)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", guard],
