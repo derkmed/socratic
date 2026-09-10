@@ -1977,7 +1977,7 @@ class TestTheResolvedTextReachesTheWire:
         """`label_html`, not `html_of`: the fragment lands in the middle of a
         sentence, and a `<p>` wrapper would carry block margins into it (#98)."""
         body = payloads.submission_body(
-            self._submission(resolved_answer="entropy"),
+            self._submission(resolved_answer=session_module.ResolvedAnswer("entropy")),
             capability_token="rotated",
         )
 
@@ -1985,7 +1985,9 @@ class TestTheResolvedTextReachesTheWire:
 
     def test_markup_in_the_resolved_text_is_sanitised_like_everything_else(self):
         body = payloads.submission_body(
-            self._submission(resolved_answer="`OrderedDict`"),
+            self._submission(
+                resolved_answer=session_module.ResolvedAnswer("`OrderedDict`")
+            ),
             capability_token="rotated",
         )
 
@@ -2007,7 +2009,7 @@ class TestTheResolvedTextReachesTheWire:
                 verdict=Verdict.INCORRECT,
                 hint_rung_shown=3,
                 revealed_option_id="b1-o1",
-                resolved_answer="entropy",
+                resolved_answer=session_module.ResolvedAnswer("entropy"),
             ),
             capability_token="rotated",
         )
@@ -2033,3 +2035,91 @@ class TestTheResolvedTextReachesTheWire:
         )
 
         assert "resolved_html" not in body
+
+
+class TestWhoWroteTheGapDecidesHowItIsRendered:
+    """The #131 review's `label_html` finding.
+
+    An option label and a model-authored reveal are restricted Markdown,
+    written to be rendered. The learner's own free text is not — they typed an
+    answer, not markup — and before ADR-0019 the client put it in the gap with
+    `textContent` for exactly that reason. Rendering it as Markdown turns a
+    leading `- ` into a bulleted list in the middle of a sentence.
+    """
+
+    def _submission(self, resolved, **overrides):
+        fields = dict(
+            verdict=Verdict.CORRECT,
+            graded_by=GradingStrategy.MODEL_GRADED,
+            hint_rung_shown=None,
+            feedback=None,
+            revealed_option_id=None,
+            blank_resolved=True,
+            attempt_sealed=False,
+            resolved_answer=resolved,
+        )
+        fields.update(overrides)
+        return session_module.Submission(**fields)
+
+    def test_a_learners_markdown_is_shown_not_obeyed(self):
+        body = payloads.submission_body(
+            self._submission(
+                session_module.ResolvedAnswer("- entropy", learner_authored=True)
+            ),
+            capability_token="rotated",
+        )
+
+        assert "<ul>" not in body["resolved_html"]
+        assert "entropy" in body["resolved_html"]
+
+    def test_a_learner_cannot_inject_markup_through_the_gap(self):
+        body = payloads.submission_body(
+            self._submission(
+                session_module.ResolvedAnswer(
+                    "<script>alert(1)</script>", learner_authored=True
+                )
+            ),
+            capability_token="rotated",
+        )
+
+        assert "<script>" not in body["resolved_html"]
+
+    def test_a_learners_newlines_do_not_become_paragraphs(self):
+        body = payloads.submission_body(
+            self._submission(
+                session_module.ResolvedAnswer(
+                    "entropy\n\nrises", learner_authored=True
+                )
+            ),
+            capability_token="rotated",
+        )
+
+        assert "<p>" not in body["resolved_html"]
+
+    def test_an_authored_label_still_renders_its_markdown(self):
+        """The other half. An option's `` `OrderedDict` `` has to keep its
+        code formatting — that is authored content, not learner input."""
+        body = payloads.submission_body(
+            self._submission(session_module.ResolvedAnswer("`OrderedDict`")),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] == "<code>OrderedDict</code>"
+
+    def test_a_gap_of_pure_whitespace_is_no_gap_at_all(self):
+        """Otherwise the blank renders as an invisible space with no
+        explanation, and whatever marks an unanswered gap never fires."""
+        body = payloads.submission_body(
+            self._submission(session_module.ResolvedAnswer("   ")),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] is None
+
+    def test_zero_width_characters_do_not_count_as_content(self):
+        body = payloads.submission_body(
+            self._submission(session_module.ResolvedAnswer("​﻿")),
+            capability_token="rotated",
+        )
+
+        assert body["resolved_html"] is None

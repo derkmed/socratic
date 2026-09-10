@@ -42,6 +42,21 @@ the gap fill and the rung-three reveal line — are deleted.
 `hint` does. The prose hint explains; this names. A gap is a noun-phrase-shaped
 hole and the prose rung-three hint is a sentence.
 
+**The gap carries its provenance, not just its text.** `ResolvedAnswer` is
+`(text, learner_authored)`, one value rather than two fields a caller could get
+out of step — the shape #127 already was. An option label and a model-authored
+reveal are restricted Markdown, written to be rendered; the learner's own free
+text is not, and rendering it as Markdown turns an answer beginning `- ` into a
+bulleted list mid-sentence. So `payloads` gains `verbatim_html`, a third and
+narrowest way for a string to become HTML: it renders nothing at all. The client
+had this right before ADR-0019 moved the rendering — it used `textContent` for
+exactly this string — and the first cut of this ADR lost it.
+
+**A gap that renders as nothing is not a filled gap.** Whitespace and
+zero-width characters are treated as absent at the render seam, so "the gap is
+empty" is decided in one place rather than inferred downstream by a CSS
+`:empty` that either can defeat.
+
 **The domain carries the text, `payloads` renders it.** `Submission` gains a
 plain `resolved_answer`; `label_html` turns it into `resolved_html` at the edge.
 This keeps `html_of` and `label_html` the only two ways a string becomes HTML in
@@ -102,6 +117,14 @@ Costs / risks:
   what the rubric encodes.
 - The `grade_answer` cache prefix is invalidated workspace-wide (ADR-0014).
   Unavoidable: the model cannot fill a field it was never asked for.
+- A blank that closes with nothing to put in it says "not answered" rather than
+  standing empty ([#130](https://github.com/derkmed/socratic/issues/130)). The
+  words are the view's own, written as DOM text like every other verdict
+  literal — not CSS generated content, which is unselectable, untranslatable
+  and unevenly announced.
+- A third renderer is a third thing to choose correctly. `verbatim_html` exists
+  for one caller; a fourth string arriving with no provenance would default to
+  the wrong one.
 - A close that does not repaint is now a rule the client has to keep, and
   nothing in the type system enforces it. The guard is a test
   (`test_answering_a_probe_never_repaints_the_gap`), because the alternative —

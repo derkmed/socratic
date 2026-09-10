@@ -187,6 +187,27 @@ class ModelGrading:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedAnswer:
+    """What fills the gap when a blank closes, and who wrote it.
+
+    The provenance is not decoration, and this is one field rather than two
+    because two nullable fields are a pair a caller can get out of step — which
+    is the shape of defect [#127](https://github.com/derkmed/socratic/issues/127)
+    already was.
+
+    An option label and a model-authored `revealed_answer` are **restricted
+    Markdown**, written to be rendered. The learner's own free text is not:
+    they typed an answer, not markup. Rendering it as Markdown puts a bulleted
+    list in the middle of a sentence the moment someone answers with a leading
+    "- ", which is why the client used `textContent` for this one string before
+    ADR-0019 moved the rendering to the service.
+    """
+
+    text: str
+    learner_authored: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Submission:
     """What one submission returns.
 
@@ -216,7 +237,7 @@ class Submission:
     attempt_sealed: bool
     model_grading: ModelGrading | None = None
     probe_asked: records.Probe | None = None
-    resolved_answer: str | None = None
+    resolved_answer: ResolvedAnswer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,8 +307,8 @@ class _Grade:
     model_grading: ModelGrading | None = None
     model_call: records.ModelCallRecord | None = None
     probe_question: str | None = None
-    resolved_answer: str | None = None
-    """What goes in the gap, as plain text, or `None` if the blank did not
+    resolved_answer: ResolvedAnswer | None = None
+    """What goes in the gap, or `None` if the blank did not
     resolve or nothing safe was available to fill it (ADR-0019). Never the
     learner's guess on a wrong answer - that was #127."""
 
@@ -368,7 +389,7 @@ def _safe_hint(blank: Blank, hint: str | None) -> str | None:
     return hint
 
 
-def _option_text(blank: Blank, option_id: str | None) -> str | None:
+def _resolved_option(blank: Blank, option_id: str | None) -> "ResolvedAnswer | None":
     """The words behind an option id, or `None` if nothing carries it.
 
     Option ids are **blank-scoped** (CONTEXT: Option id), so this takes the
@@ -381,7 +402,7 @@ def _option_text(blank: Blank, option_id: str | None) -> str | None:
         return None
     for option in blank.options or ():
         if option.option_id == option_id:
-            return option.text
+            return ResolvedAnswer(option.text)
     return None
 
 
@@ -428,11 +449,13 @@ def _safe_revealed_answer(blank: Blank, revealed: str | None) -> str | None:
     if revealed is None or not blank.rubric:
         return revealed
     normalised = " ".join(revealed.split())
+    if not normalised:
+        return None
     if len(normalised) > REVEAL_MAX_CHARS:
         return None
     if " ".join(blank.rubric.split()) in normalised:
         return None
-    return revealed
+    return normalised
 
 
 def _ladder_rung(prior_wrong: int) -> int:
@@ -477,7 +500,7 @@ def _grade_against_the_key(context: _GradingContext) -> _Grade:
             feedback=blank.reinforcement,
             revealed_option_id=None,
             probe_question=blank.probe_question,
-            resolved_answer=_option_text(blank, key),
+            resolved_answer=_resolved_option(blank, key),
         )
 
     rung = _ladder_rung(context.prior_wrong)
@@ -487,7 +510,7 @@ def _grade_against_the_key(context: _GradingContext) -> _Grade:
         hint_rung_shown=rung,
         feedback=_hint_for_rung(blank, rung),
         revealed_option_id=revealed,
-        resolved_answer=_option_text(blank, revealed),
+        resolved_answer=_resolved_option(blank, revealed),
     )
 
 
@@ -561,7 +584,9 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
             model_grading=grading,
             model_call=call,
             probe_question=grading.probe_question,
-            resolved_answer=context.submitted,
+            resolved_answer=ResolvedAnswer(
+                context.submitted, learner_authored=True
+            ),
         )
 
     return _Grade(
@@ -572,7 +597,9 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
         model_grading=grading,
         model_call=call,
         resolved_answer=(
-            grading.revealed_answer if rung >= HINT_LADDER_RUNGS else None
+            ResolvedAnswer(grading.revealed_answer)
+            if rung >= HINT_LADDER_RUNGS and grading.revealed_answer
+            else None
         ),
     )
 

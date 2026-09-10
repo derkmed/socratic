@@ -72,6 +72,7 @@ from socratic.domain.session import (
     BlankAlreadyResolved,
     GradingParseError,
     QuizSession,
+    ResolvedAnswer,
 )
 from socratic.domain.types import Blank, BlankSegment, Option, Quiz, TextSegment
 
@@ -1894,7 +1895,7 @@ class TestWhatFillsTheGapWhenABlankResolves:
 
         result = submit(quiz_session, attempt, "b1", "b1-o1")
 
-        assert result.resolved_answer == "entropy"
+        assert result.resolved_answer == ResolvedAnswer("entropy")
 
     def test_a_novice_rung_three_resolves_to_the_revealed_option_text(self):
         attempt = attempt_for(novice_quiz())
@@ -1904,7 +1905,7 @@ class TestWhatFillsTheGapWhenABlankResolves:
             result = submit(quiz_session, attempt, "b1", "b1-o2")
 
         assert result.blank_resolved
-        assert result.resolved_answer == "entropy"
+        assert result.resolved_answer == ResolvedAnswer("entropy")
 
     def test_an_unresolved_blank_has_nothing_to_put_in_the_gap(self):
         """Rungs one and two leave the blank open, so there is no gap to fill
@@ -1926,7 +1927,9 @@ class TestWhatFillsTheGapWhenABlankResolves:
 
         result = submit(quiz_session, attempt, "b1", "entropy climbs")
 
-        assert result.resolved_answer == "entropy climbs"
+        assert result.resolved_answer == ResolvedAnswer(
+            "entropy climbs", learner_authored=True
+        ), "the learner's own words must be marked as theirs, not rendered as markup"
 
     def test_an_advanced_rung_three_resolves_to_the_short_form_reveal(self):
         attempt = attempt_for(advanced_quiz())
@@ -1942,7 +1945,8 @@ class TestWhatFillsTheGapWhenABlankResolves:
             result = submit(quiz_session, attempt, "b1", "heat")
 
         assert result.blank_resolved
-        assert result.resolved_answer == "entropy"
+        assert result.resolved_answer == ResolvedAnswer("entropy")
+        assert not result.resolved_answer.learner_authored
 
     def test_an_advanced_rung_three_never_resolves_to_the_wrong_answer(self):
         """The defect itself. The model omitted `revealed_answer`, the blank

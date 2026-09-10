@@ -92,17 +92,15 @@ body {
  * wrong guess; this stops that gap being a *silent* one, which master
  * acceptance 31 forbids.
  *
- * Pinned to the resolved state on purpose. `:empty` is true of a placeholder
- * nobody has reached yet, so without the state every gap in a fresh quiz would
- * announce itself as unanswered.
- *
- * The words are the overlay's own, like "Your answer" and "Blank 1 of 3", and
- * they live here rather than in `createDomView` so the fix adds no logic to
- * the one layer that is untested by construction. */
-.socratic-blank[data-state="resolved"]:empty::after {
-  content: "not answered";
+ * The words themselves are written by the client, as real text in the
+ * document, the way every other verdict literal is. They are deliberately not
+ * `content:` here: generated content is not in the DOM, so it cannot be
+ * selected, copied or translated, and it reaches assistive tech unevenly. */
+.socratic-blank[data-state="unanswered"] {
+  border-bottom-color: var(--rule);
   color: var(--muted);
   font-style: italic;
+  min-width: 0;
 }
 
 .socratic-control,

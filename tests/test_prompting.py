@@ -999,6 +999,15 @@ class TestSegmentOneAsksForTheShortFormReveal:
     """
 
     def _instruction(self) -> str:
+        """Segment 1 with its wrapping normalised away.
+
+        The prompt is hard-wrapped, so a phrase that reads as one line in the
+        source can carry a newline through the middle of it. Asserting on the
+        raw text makes a test that passes or fails on where the wrap lands.
+        """
+        return " ".join(self._raw().split())
+
+    def _raw(self) -> str:
         return prompting.assemble(
             CallType.GRADE_ANSWER,
             profile=ADA,
@@ -1014,15 +1023,23 @@ class TestSegmentOneAsksForTheShortFormReveal:
 
     def test_the_instruction_asks_for_a_phrase_and_not_a_sentence(self):
         """The whole point of the field: the hint explains, this one names, and
-        what fits in a gap is a noun phrase."""
-        instruction = self._instruction().lower()
+        what fits in a gap is a noun phrase.
 
-        assert "phrase" in instruction
+        Anchored on the sentence that says so. "phrase" and "rubric" both
+        already appear elsewhere in this prompt — an assertion on either alone
+        passes with the whole `revealed_answer` paragraph deleted, which is what
+        the #131 review caught.
+        """
+        instruction = self._instruction()
+
+        assert "phrase that goes in the gap" in instruction
+        assert "The hint explains; this names." in instruction
 
     def test_the_instruction_still_forbids_handing_back_the_rubric(self):
         """The guard is structural (`_safe_revealed_answer`), but segment 1
         asking for a short reveal must not read as permission to paste the
-        rubric into it."""
+        rubric into it — so the prohibition is restated inside the paragraph
+        that grants the reveal, not left to the one governing hints."""
         instruction = self._instruction()
 
-        assert "rubric" in instruction
+        assert "a `revealed_answer` that hands back the rubric" in instruction

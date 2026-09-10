@@ -300,6 +300,11 @@ var SocraticQuiz = (function () {
 
   /* --- The binding -------------------------------------------------------- */
 
+  var UNANSWERED = "not answered";
+  /* What a gap says when the blank closed with nothing to fill it (#130). This
+   * view's own words, like the verdict lines — never the model's. */
+
+
   function setHtml(element, html) {
     if (!element) {
       return;
@@ -373,13 +378,22 @@ var SocraticQuiz = (function () {
       resolveBlank: function (event) {
         var placeholder = placeholderFor(event.blankId);
         if (placeholder) {
-          placeholder.setAttribute("data-state", "resolved");
-          /* One assignment, and no lookup. The fragment came through
-           * `payloads.label_html`, so it is sanitised and inline — a phrase
-           * with no block wrapper, which is what belongs in the middle of a
-           * sentence (#98). A null renders as empty, which is what `setHtml`
-           * already does and what ADR-0019 asks for. */
-          setHtml(placeholder, event.resolvedHtml);
+          /* No lookup. The fragment came through the service already
+           * sanitised and inline — a phrase with no block wrapper, which is
+           * what belongs in the middle of a sentence (#98).
+           *
+           * When there is nothing to put there the gap says so rather than
+           * standing empty (#130): a blank can close with no reveal, and a
+           * hole in the finished passage is the silent blank acceptance 31
+           * forbids. The words are this view's own, like the verdict lines,
+           * and they go in as text so they are selectable and announced. */
+          if (event.resolvedHtml) {
+            placeholder.setAttribute("data-state", "resolved");
+            setHtml(placeholder, event.resolvedHtml);
+          } else {
+            placeholder.setAttribute("data-state", "unanswered");
+            placeholder.textContent = UNANSWERED;
+          }
         }
         show(controlFor(event.blankId), false);
       },

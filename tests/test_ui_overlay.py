@@ -185,56 +185,36 @@ class TestTheDocument:
 
 
 class TestAClosedBlankIsNeverSilent:
-    """[#130](https://github.com/derkmed/socratic/issues/130), the follow-up
-    ADR-0019 left open.
+    """[#130](https://github.com/derkmed/socratic/issues/130).
 
-    A blank can close with nothing to put in it: on the model-graded path rung
-    three closes the blank whether or not `revealed_answer` arrived, and
-    `_safe_revealed_answer` may drop the one that did. ADR-0019 chose an empty
-    gap over the learner's wrong guess, which was right — but master acceptance
-    31 forbids a *silent* blank, and an unexplained hole in the finished
-    passage is one.
+    A blank can close with nothing to put in it: rung three closes it whether
+    or not a short-form reveal arrived, and the custody guard may drop the one
+    that did. ADR-0019 chose an empty gap over the learner's wrong guess, which
+    was right — but master acceptance 31 forbids a *silent* blank.
 
-    Requiring the field at rung three instead is not available: ADR-0004 records
-    that `strict: true` holds structurally but "cannot enforce **conditional**
-    invariants", and the custody guard can drop a well-formed reveal anyway. So
-    the gap has to be able to say what happened.
-
-    The affordance is CSS over the state the view already sets, which is why it
-    adds no logic to `createDomView` - the layer that shipped #127 precisely
-    because it is untested by construction.
+    The words are written into the document by the client, the way every other
+    verdict literal is (`paint`'s "That is it."), so they are real text:
+    selectable, copyable, translatable, and announced. The stylesheet only says
+    how they look. An earlier cut put them in CSS `content:`, which is none of
+    those things.
     """
 
-    def test_a_resolved_blank_with_nothing_in_it_says_so(self):
+    def test_the_unanswered_state_is_styled(self):
         document = render()
 
         assert re.search(
-            r"\.socratic-blank\[data-state=.resolved.\]:empty::after[^{]*\{"
-            r"[^}]*content:",
-            document,
+            r"\.socratic-blank\[data-state=.unanswered.\]\s*\{[^}]*\}", document
         )
 
-    def test_the_words_are_the_overlays_own(self):
-        """Not the model's. The overlay writes its own chrome - "Your answer",
-        "Blank 1 of 3" - and this is chrome: it describes what happened to the
-        exercise, not the subject being taught."""
+    def test_the_words_are_not_in_the_stylesheet(self):
+        """`content:` is not a carrier for text a learner has to be able to
+        read, select and translate."""
         document = render()
 
-        assert "not answered" in document
-
-    def test_a_blank_still_waiting_is_not_labelled(self):
-        """`:empty` is true of an unanswered placeholder too, so the rule has to
-        be pinned to the resolved state or every gap in a fresh quiz would
-        announce itself as unanswered."""
-        document = render()
-
-        rule = re.search(
-            r"\.socratic-blank\[data-state=.resolved.\]:empty::after[^{]*\{"
-            r"[^}]*\}",
+        assert not re.search(
+            r"\.socratic-blank\[[^]]*\](?:::after|:empty)[^{]*\{[^}]*content:",
             document,
         )
-        assert rule, "the rule is missing entirely"
-        assert "active" not in rule.group(0)
 
 
 class TestTheSessionAndItsToken:
