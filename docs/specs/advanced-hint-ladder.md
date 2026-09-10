@@ -87,12 +87,18 @@ In order, one seam at a time.
   `hint_html`, and no change to `payloads.py`, `content.py`, `overlay.py` or
   `client.js`.
 - **What text fills the gap when an Advanced blank closes on rung three.**
-  `client.js` writes `revealedOptionId || submitted`, so a rung-three close
-  currently leaves the learner's *wrong* answer in the gap. That is a
-  pre-existing client defect independent of this change and is filed separately.
+  *Resolved by [ADR-0019](../adr/0019-resolved-blank-text-comes-from-the-service.md)
+  ([#127](https://github.com/derkmed/socratic/issues/127)).* The
+  `revealedOptionId || submitted` this section described did exactly what it
+  says — left the learner's wrong answer in the gap. The service now states the
+  text as `resolved_html`, and rung three names the answer in a phrase through
+  `revealed_answer`.
 - **Novice.** Zero model calls, wholly pre-authored feedback, unchanged.
 - **`ProbeAnswer.revealed_option_id`** on the "reveals and moves on" path after
   a second failed probe. Same shape, different method; not what #56 reports.
+  Still out of scope, and now known to be unreachable: that path needs
+  `REOPEN_BLANK`, which only the Advanced policy carries, and an Advanced blank
+  is validated to carry no `correct_option_id`.
 
 ## Acceptance
 

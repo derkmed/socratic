@@ -60,6 +60,7 @@ from socratic.domain.records import (
     Verdict,
 )
 from socratic.domain.registry import (
+    ADVANCED_POLICY,
     BlankRange,
     ModePolicy,
     ModeRegistry,
@@ -1976,58 +1977,54 @@ class TestWhatFillsTheGapWhenABlankResolves:
         assert RUBRIC not in repr(dataclasses.astuple(result))
 
 
-class TestTheProbePathFillsTheGapTheSameWay:
-    """A failed probe whose re-open cap is spent "reveals and moves on"
-    (ADR-0009, acceptance 15) — the same close as rung three, and so the same
-    obligation to say what goes in the gap (ADR-0019).
+class TestTheProbePathHasNothingToPutInTheGap:
+    """The #131 review's second blocking finding.
 
-    `ProbeAnswer` already carried `revealed_option_id` and the client already
-    ignored it, so this path had the defect of #127 with none of its symptom:
-    it filled the gap with nothing at all.
+    An earlier cut gave `ProbeAnswer` a `resolved_answer`. It could never carry
+    one: the reveal branch needs `REOPEN_BLANK`, which only the Advanced policy
+    has, and an Advanced blank is validated to carry no `correct_option_id`. The
+    tests that "covered" it built a Novice policy mutated to `REOPEN_BLANK` — a
+    mode the validators forbid — so they were green against a shape the service
+    cannot emit, while the reachable shape had no test at all.
+
+    That is not a hole to fill. A probe only fires after a correct answer, so
+    the gap already holds it; this path closes a blank without changing what
+    belongs in it.
     """
 
-    def _reopening_session(self, attempt, *responses):
-        reopening = ModeRegistry(
-            {
-                DifficultyMode.NOVICE: dataclasses.replace(
-                    NOVICE_POLICY,
-                    probe_failure_behavior=ProbeFailureBehavior.REOPEN_BLANK,
-                )
-            }
-        )
-        attempts = InMemoryAttemptRepository()
-        attempts.save(attempt)
-        return QuizSession(
-            model_client=RecordingModelClient(
-                {CallType.GRADE_PROBE: list(responses)}
-            ),
-            attempts=attempts,
-            registry=reopening,
-            clock=frozen_clock,
-            rng=random.Random(0),
+    def _answer(self):
+        return session_module.ProbeAnswer(
+            verdict=Verdict.CORRECT,
+            correction=None,
+            blank_reopened=False,
+            blank_resolved=True,
+            revealed_option_id=None,
+            attempt_sealed=False,
         )
 
-    def test_a_probe_that_reveals_says_what_goes_in_the_gap(self):
-        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
-        quiz_session = self._reopening_session(
-            attempt, probed("incorrect"), probed("incorrect")
+    def test_the_probe_answer_carries_no_resolved_text(self):
+        assert not hasattr(self._answer(), "resolved_answer")
+
+    def test_only_advanced_re_opens_and_advanced_has_no_option_to_reveal(self):
+        """Why the field had nothing to carry, pinned in both halves so a
+        future policy pairing `REOPEN_BLANK` with an option bank fails here
+        rather than silently reviving a dead branch."""
+        reopening = {
+            mode
+            for mode, policy in (
+                (DifficultyMode.NOVICE, NOVICE_POLICY),
+                (DifficultyMode.ADVANCED, ADVANCED_POLICY),
+            )
+            if policy.probe_failure_behavior is ProbeFailureBehavior.REOPEN_BLANK
+        }
+        assert reopening == {DifficultyMode.ADVANCED}
+
+        errors = ADVANCED_POLICY.validate_blank(
+            Blank(
+                blank_id="b1",
+                mode=DifficultyMode.ADVANCED,
+                rubric="a rubric",
+                correct_option_id="b1-o1",
+            )
         )
-        submit(quiz_session, attempt, "b1", "b1-o1")
-        answer_probe(quiz_session, attempt, "b1", "I guessed.")
-        submit(quiz_session, attempt, "b1", "b1-o1")
-
-        second = answer_probe(quiz_session, attempt, "b1", "Still guessing.")
-
-        assert second.blank_resolved is True
-        assert second.revealed_option_id == "b1-o1"
-        assert second.resolved_answer == "entropy"
-
-    def test_a_probe_that_reopens_reveals_nothing_to_put_in_the_gap(self):
-        attempt = attempt_for(novice_quiz(), probe_cadence=ProbeCadence.ALWAYS)
-        quiz_session = self._reopening_session(attempt, probed("incorrect"))
-        submit(quiz_session, attempt, "b1", "b1-o1")
-
-        answer = answer_probe(quiz_session, attempt, "b1", "I guessed.")
-
-        assert answer.blank_reopened is True
-        assert answer.resolved_answer is None
+        assert any("correct_option_id" in error for error in errors)

@@ -2015,7 +2015,11 @@ class TestTheResolvedTextReachesTheWire:
         assert body["revealed_option_id"] == "b1-o1"
         assert body["resolved_html"] == "entropy"
 
-    def test_the_probe_path_carries_it_too(self):
+    def test_the_probe_path_carries_no_resolved_text(self):
+        """It cannot close a blank onto text of its own: a probe only fires
+        after a correct answer, so the gap already holds it. Carrying the field
+        anyway gave the client something to paint with when it had nothing,
+        which erased the answer (#131 review)."""
         body = payloads.probe_answer_body(
             session_module.ProbeAnswer(
                 verdict=Verdict.INCORRECT,
@@ -2024,9 +2028,8 @@ class TestTheResolvedTextReachesTheWire:
                 blank_resolved=True,
                 revealed_option_id="b1-o1",
                 attempt_sealed=False,
-                resolved_answer="entropy",
             ),
             capability_token="rotated",
         )
 
-        assert body["resolved_html"] == "entropy"
+        assert "resolved_html" not in body

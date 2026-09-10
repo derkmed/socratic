@@ -237,14 +237,12 @@ var SocraticQuiz = (function () {
             advance();
           } else if (reply.blank_resolved) {
             resolved[blankId] = true;
-            /* This path can close the blank too — a failed probe with its
-             * re-open cap spent reveals and moves on (ADR-0009) — so it owes
-             * the gap the same text a rung-three close does (ADR-0019). Not on
-             * the re-open branch: that blank is going back to the learner. */
-            view.resolveBlank({
-              blankId: blankId,
-              resolvedHtml: orNull(reply.resolved_html)
-            });
+            /* The gap is deliberately not repainted here. A probe only fires
+             * after a *correct* answer, so by the time one is answered the gap
+             * already holds it — `submit` put it there. A close on this path
+             * ("reveals and moves on", ADR-0009) does not change what belongs
+             * in the gap, so a `resolveBlank` call here has nothing to write
+             * and erases what was there. That was the #131 regression. */
           }
           if (reply.attempt_sealed) {
             view.showRating();

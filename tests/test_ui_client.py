@@ -777,32 +777,47 @@ class TestTheProbe:
         assert graded_call["blankReopened"] is True
         assert "Heat is not disorder." in graded_call["correctionHtml"]
 
-    def test_a_probe_that_reveals_and_moves_on_fills_the_gap(self):
-        """A failed probe whose re-open cap is spent closes the blank
-        (ADR-0009, acceptance 15). That is a close like any other, so it owes
-        the gap its text — and until ADR-0019 there was no field to carry one,
-        so this path closed the blank and left the gap empty."""
+    def test_answering_a_probe_never_repaints_the_gap(self):
+        """The regression #131's review caught, at the seam that shipped it.
+
+        A probe only fires after a *correct* answer, so by the time one is
+        answered the gap already holds that answer — `submit` put it there. The
+        probe path has nothing to say about the gap, and a `resolveBlank` call
+        that fires anyway arrives with nothing to write and erases what was
+        there. On the common Novice flow that turned a correctly answered blank
+        into an empty one, and with #130's affordance into one captioned "not
+        answered"."""
         emitted = run_js(
             """
-            const client = clientWith([%s]);
-            await client.answerProbe('b1', 'Still guessing');
+            const client = clientWith([%s, %s]);
+            await client.submitAnswer('b1', 'o1');
+            await client.answerProbe('b1', 'I recalled the second law.');
             emit({});
             """
-            % json.dumps(
-                {
-                    "verdict": "incorrect",
-                    "correction_html": "<p>Not quite.</p>",
-                    "blank_reopened": False,
-                    "blank_resolved": True,
-                    "revealed_option_id": "o1",
-                    "resolved_html": "entropy",
-                    "attempt_sealed": False,
-                    "capability_token": ROTATED,
-                }
+            % (
+                graded(probe=PROBE, resolved_html="entropy"),
+                json.dumps(
+                    {
+                        "verdict": "correct",
+                        "correction_html": None,
+                        "blank_reopened": False,
+                        "blank_resolved": True,
+                        "revealed_option_id": None,
+                        "attempt_sealed": True,
+                        "capability_token": ROTATED,
+                    }
+                ),
             )
         )
 
-        assert only(emitted, "resolveBlank")["args"][0]["resolvedHtml"] == "entropy"
+        gaps = [
+            call["args"][0]
+            for call in emitted["calls"]
+            if call["name"] == "resolveBlank"
+        ]
+        assert gaps == [{"blankId": "b1", "resolvedHtml": "entropy"}], (
+            "the probe path repainted a gap the submission had already filled"
+        )
 
     def test_a_probe_that_reopens_the_blank_fills_no_gap(self):
         """The blank is going back to the learner; filling it would answer the
@@ -820,7 +835,6 @@ class TestTheProbe:
                     "blank_reopened": True,
                     "blank_resolved": False,
                     "revealed_option_id": None,
-                    "resolved_html": None,
                     "attempt_sealed": False,
                     "capability_token": ROTATED,
                 }

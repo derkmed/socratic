@@ -290,7 +290,6 @@ def probe_answer_body(
         "blank_reopened": answer.blank_reopened,
         "blank_resolved": answer.blank_resolved,
         "revealed_option_id": answer.revealed_option_id,
-        "resolved_html": _resolved_html(answer.resolved_answer),
         "attempt_sealed": answer.attempt_sealed,
         "capability_token": capability_token,
     }

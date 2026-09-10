@@ -32,7 +32,7 @@ told it.**
 ## Decision
 
 **The graded submission carries the resolved text.** `resolved_html` on the
-submission and probe-answer bodies, rendered by `payloads.label_html` — an
+submission body, rendered by `payloads.label_html` — an
 inline fragment, not a segment node, so text and MathML arrive through one field
 and `createDomView` stays a `setHtml` with no type dispatch. Both DOM lookups —
 the gap fill and the rung-three reveal line — are deleted.
@@ -65,6 +65,15 @@ on the one path it was written for. So the `grade_answer` cache prefix is
 rewritten, and its pinned digest moves — the same cost ADR-0016 paid for `hint`,
 for the same reason.
 
+**The probe path carries nothing.** It can close a blank — "reveals and moves
+on", ADR-0009 — but it cannot change what belongs in the gap, because a probe
+only fires after a correct answer and the gap already holds it. An earlier cut
+of this ADR gave `ProbeAnswer` a `resolved_answer` for symmetry; the field was
+unreachable under every registered policy, and the client call it justified
+fired on every probe answer with nothing to write, erasing the gap. Symmetry was
+the wrong instinct: the two paths are not symmetric, because only one of them
+decides what the answer was.
+
 **`revealed_option_id` stays.** It is the sanctioned disclosure
 [ADR-0003](0003-grading-authority-and-key-custody.md) accounts for, and it
 remains the audit marker for what was disclosed. What changes is that no text is
@@ -93,6 +102,10 @@ Costs / risks:
   what the rubric encodes.
 - The `grade_answer` cache prefix is invalidated workspace-wide (ADR-0014).
   Unavoidable: the model cannot fill a field it was never asked for.
+- A close that does not repaint is now a rule the client has to keep, and
+  nothing in the type system enforces it. The guard is a test
+  (`test_answering_a_probe_never_repaints_the_gap`), because the alternative —
+  a field that says "paint nothing" — is what caused the regression.
 - The thin-view claim is now load-bearing rather than incidental. This bug is
   the proof that "too thin to hold a bug" was not true; keeping it true is a
   standing cost of the design, not a fact about it.

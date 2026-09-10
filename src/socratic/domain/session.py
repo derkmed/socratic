@@ -231,7 +231,17 @@ class ProbeAnswer:
     `revealed_option_id` is non-null only on that second case — the "reveals
     and moves on" of ADR-0009, mirroring rung three — and only for a blank that
     has an option id at all. An Advanced blank has none, and its rubric is not
-    one (D4).
+    one (D4). In practice that is *never*: re-opening is `REOPEN_BLANK`, which
+    only the Advanced policy carries, and an Advanced blank is validated to
+    carry no `correct_option_id`. The field is kept because the branch is
+    written in terms of the policy rather than the mode, and a future policy
+    could pair `REOPEN_BLANK` with an option bank.
+
+    There is deliberately **no** `resolved_answer` here. This path can close a
+    blank, but it cannot change what belongs in the gap: a probe only fires
+    after a correct answer, so the gap already holds it. Carrying one anyway
+    gave the client something to paint with when it had nothing, which erased
+    the answer (#131 review).
     """
 
     verdict: Verdict
@@ -240,10 +250,6 @@ class ProbeAnswer:
     blank_resolved: bool
     revealed_option_id: str | None
     attempt_sealed: bool
-    resolved_answer: str | None = None
-    """What goes in the gap on the close this path can make, in words
-    (ADR-0019). Null when the blank re-opened, and null on an Advanced blank,
-    which has no option to name."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1048,7 +1054,6 @@ class QuizSession:
             blank_resolved=is_blank_resolved(attempt, blank_id),
             revealed_option_id=revealed,
             attempt_sealed=sealed,
-            resolved_answer=_option_text(blank, revealed),
         )
 
     def dismiss_probe(
