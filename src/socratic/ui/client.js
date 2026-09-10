@@ -150,13 +150,16 @@ var SocraticQuiz = (function () {
           blank_id: blankId,
           submitted: submitted
         }).then(function (reply) {
-          applyGrade(blankId, submitted, reply);
+          applyGrade(blankId, reply);
           return reply;
         })
       );
     }
 
-    function applyGrade(blankId, submitted, reply) {
+    /* The learner's guess is deliberately not a parameter. It was one until
+     * #127, and the gap-filling fallback that read it is the defect; a function
+     * that never receives it cannot regrow one. */
+    function applyGrade(blankId, reply) {
       var feedbackHtml = orNull(reply.feedback_html);
 
       var event = {
@@ -170,7 +173,11 @@ var SocraticQuiz = (function () {
          * than handed a null to render. */
         pedagogyPending: feedbackHtml === null,
         rung: reply.hint_rung_shown === undefined ? null : reply.hint_rung_shown,
-        revealedOptionId: orNull(reply.revealed_option_id)
+        revealedOptionId: orNull(reply.revealed_option_id),
+        /* What goes in the gap, rendered and sanitised by the service
+         * (ADR-0019). The client used to work this out for itself by scanning
+         * the document for a matching option id, which is #127. */
+        resolvedHtml: orNull(reply.resolved_html)
       };
 
       /* The verdict starts the celebration. It comes first because it is what
@@ -184,15 +191,14 @@ var SocraticQuiz = (function () {
 
       if (reply.blank_resolved) {
         resolved[blankId] = true;
-        /* What goes in the gap. The service sends no resolved text on a
-         * correct answer — there is no field for one — so it is what the
-         * learner got right, and on a rung-three reveal it is the revealed
-         * option instead, because what they submitted was wrong (ADR-0009).
-         * A finished quiz whose blanks are all empty is the "silent blank"
-         * master acceptance 31 forbids. */
+        /* What goes in the gap, straight from the service (ADR-0019). A blank
+         * that closes on rung three closes because the last guess was *wrong*,
+         * and planting that in the finished explanation is the half of #127 a
+         * scoped lookup would not have fixed. A null leaves the gap empty,
+         * which is #130. */
         view.resolveBlank({
           blankId: blankId,
-          answer: event.revealedOptionId || submitted
+          resolvedHtml: event.resolvedHtml
         });
         advance();
       }
@@ -231,6 +237,12 @@ var SocraticQuiz = (function () {
             advance();
           } else if (reply.blank_resolved) {
             resolved[blankId] = true;
+            /* The gap is deliberately not repainted here. A probe only fires
+             * after a *correct* answer, so by the time one is answered the gap
+             * already holds it — `submit` put it there. A close on this path
+             * ("reveals and moves on", ADR-0009) does not change what belongs
+             * in the gap, so a `resolveBlank` call here has nothing to write
+             * and erases what was there. That was the #131 regression. */
           }
           if (reply.attempt_sealed) {
             view.showRating();
@@ -288,6 +300,11 @@ var SocraticQuiz = (function () {
 
   /* --- The binding -------------------------------------------------------- */
 
+  var UNANSWERED = "not answered";
+  /* What a gap says when the blank closed with nothing to fill it (#130). This
+   * view's own words, like the verdict lines — never the model's. */
+
+
   function setHtml(element, html) {
     if (!element) {
       return;
@@ -341,10 +358,12 @@ var SocraticQuiz = (function () {
       );
       var reveal = verdict.querySelector(".socratic-reveal");
       if (event.revealedOptionId) {
-        var option = root.querySelector(
-          '.socratic-option[data-option-id="' + event.revealedOptionId + '"]'
-        );
-        setHtml(reveal, "The answer: " + (option ? option.innerHTML : ""));
+        /* The same service-supplied fragment that fills the gap, rather than
+         * the option's markup looked up by id — that lookup was document-wide
+         * and option ids are blank-scoped (#127, ADR-0019). `revealedOptionId`
+         * still decides *whether* to say this, because it is the disclosure
+         * marker ADR-0003 accounts for; it no longer decides what to say. */
+        setHtml(reveal, "The answer: " + (event.resolvedHtml || ""));
       }
       show(reveal, Boolean(event.revealedOptionId));
     }
@@ -359,21 +378,21 @@ var SocraticQuiz = (function () {
       resolveBlank: function (event) {
         var placeholder = placeholderFor(event.blankId);
         if (placeholder) {
-          placeholder.setAttribute("data-state", "resolved");
-          var option = root.querySelector(
-            '.socratic-option[data-option-id="' + event.answer + '"]'
-          );
-          if (option) {
-            /* The option's label, already sanitised in the service, and
-             * inline: `payloads.label_html` renders a phrase with no block
-             * wrapper (#98), so what lands in this inline placeholder is
-             * inline markup rather than a `<p>` with paragraph margins. */
-            setHtml(placeholder, option.innerHTML);
+          /* No lookup. The fragment came through the service already
+           * sanitised and inline — a phrase with no block wrapper, which is
+           * what belongs in the middle of a sentence (#98).
+           *
+           * When there is nothing to put there the gap says so rather than
+           * standing empty (#130): a blank can close with no reveal, and a
+           * hole in the finished passage is the silent blank acceptance 31
+           * forbids. The words are this view's own, like the verdict lines,
+           * and they go in as text so they are selectable and announced. */
+          if (event.resolvedHtml) {
+            placeholder.setAttribute("data-state", "resolved");
+            setHtml(placeholder, event.resolvedHtml);
           } else {
-            /* Free text the learner typed. Text, never markup: it is the one
-             * string in this document that did not come through the service's
-             * sanitiser. */
-            placeholder.textContent = event.answer;
+            placeholder.setAttribute("data-state", "unanswered");
+            placeholder.textContent = UNANSWERED;
           }
         }
         show(controlFor(event.blankId), false);

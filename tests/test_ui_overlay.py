@@ -184,6 +184,39 @@ class TestTheDocument:
                          document)
 
 
+class TestAClosedBlankIsNeverSilent:
+    """[#130](https://github.com/derkmed/socratic/issues/130).
+
+    A blank can close with nothing to put in it: rung three closes it whether
+    or not a short-form reveal arrived, and the custody guard may drop the one
+    that did. ADR-0019 chose an empty gap over the learner's wrong guess, which
+    was right — but master acceptance 31 forbids a *silent* blank.
+
+    The words are written into the document by the client, the way every other
+    verdict literal is (`paint`'s "That is it."), so they are real text:
+    selectable, copyable, translatable, and announced. The stylesheet only says
+    how they look. An earlier cut put them in CSS `content:`, which is none of
+    those things.
+    """
+
+    def test_the_unanswered_state_is_styled(self):
+        document = render()
+
+        assert re.search(
+            r"\.socratic-blank\[data-state=.unanswered.\]\s*\{[^}]*\}", document
+        )
+
+    def test_the_words_are_not_in_the_stylesheet(self):
+        """`content:` is not a carrier for text a learner has to be able to
+        read, select and translate."""
+        document = render()
+
+        assert not re.search(
+            r"\.socratic-blank\[[^]]*\](?:::after|:empty)[^{]*\{[^}]*content:",
+            document,
+        )
+
+
 class TestTheSessionAndItsToken:
     def test_the_document_carries_the_session_the_token_and_the_service_url(self):
         document = render()

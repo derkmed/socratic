@@ -482,3 +482,24 @@ class TestTheSchemaFollowsTheModeTheCallIsFor:
         )
 
         assert output_schemas.for_segments(segments) == output_schemas.GRADE_ANSWER
+
+
+class TestTheGradingResponseCarriesTheShortFormReveal:
+    """[ADR-0019](../docs/adr/0019-resolved-blank-text-comes-from-the-service.md).
+
+    An Advanced blank has no option id, so its rung-three reveal is prose
+    (ADR-0016) — and prose is a sentence, not something that fits in a gap.
+    `revealed_answer` is the phrase that does, and it rides the response
+    already in flight rather than costing a call of its own.
+    """
+
+    def test_the_grading_response_declares_a_nullable_revealed_answer(self):
+        assert (
+            output_schemas.GRADE_ANSWER["properties"]["revealed_answer"]
+            == output_schemas.NULLABLE_STRING
+        )
+
+    def test_the_short_form_reveal_is_required_like_every_other_rider(self):
+        """`_strict` makes a nullable field required and null-valued rather
+        than absent, which is the only way this schema subset says optional."""
+        assert "revealed_answer" in output_schemas.GRADE_ANSWER["required"]

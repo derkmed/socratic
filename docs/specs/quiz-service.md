@@ -128,6 +128,23 @@ spent (`Submission` docstring, ADR-0009). A test asserts that authoring a quiz
 whose correct option is a known sentinel never puts that sentinel in the author
 response body.
 
+`resolved_html` on a submission is **what goes in the gap** when a blank closes,
+rendered inline by `payloads.label_html`
+([ADR-0019](../adr/0019-resolved-blank-text-comes-from-the-service.md)). It is
+not a second disclosure on the deterministic path: on a correct answer it is
+what the learner already knows they said, and on a rung-three reveal it is the
+text of the option `revealed_option_id` already named. On the model-graded path
+it **is** a disclosure that `revealed_option_id` does not mark — that field
+names an option id and an Advanced blank has none — so the audit marker covers
+the Novice half only, as it already did for ADR-0016's `hint`.
+
+The probe-answer body carries no `resolved_html`: that path can close a blank
+but never decides what the answer was. It exists because the client used to
+reconstruct it by scanning the rendered document for a matching option id —
+which, option ids being blank-scoped, usually found a different blank's option
+([#127](https://github.com/derkmed/socratic/issues/127)). A null means the gap
+stays empty and never means "use what the learner typed".
+
 ### Containers
 
 `Dockerfile` (service, `python:3.10-slim`, installs `.[service,anthropic,rendering]`)

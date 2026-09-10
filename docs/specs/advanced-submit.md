@@ -149,9 +149,20 @@ validator forbids them), so `feedback` is `None` on the Advanced path and the
 reactive tutor line is what the learner actually reads. That is the model's own
 instruction: *"you do not choose it and you do not write the hint here."*
 
-**Nothing is revealed on rung three in Advanced.** `revealed_option_id` names an
+**`revealed_option_id` is never set on rung three in Advanced.** It names an
 option id and an Advanced blank has none; the rubric is the answer key and stays
 in the backend (D4). The blank still resolves.
+
+*Amended by [ADR-0016](../adr/0016-advanced-hint-rides-the-grading-response.md)
+and [ADR-0019](../adr/0019-resolved-blank-text-comes-from-the-service.md).*
+"Nothing is revealed", as this section originally read, was true of the field
+and false of the learner's experience, and the gap between those two is
+[#127](https://github.com/derkmed/socratic/issues/127). The blank resolves with
+`revealed_option_id` null, and the client — having no text to put in the gap —
+fell back to the learner's third **wrong** guess and planted it in the finished
+explanation. Rung three now reveals in prose through `hint` (ADR-0016) and
+names the answer in a phrase through `revealed_answer` (ADR-0019), which is
+what fills the gap. `revealed_option_id` stays null on this path throughout.
 
 ### 6. Persisting the guess and the call
 

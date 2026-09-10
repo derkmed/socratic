@@ -14,6 +14,8 @@ Everything that reaches a browser leaves here already rendered and sanitised
 (ADR-0012): the iframe renders no model-authored text itself.
 """
 
+import html
+import string
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -238,6 +240,67 @@ def _tutor_line_html(submission: session_module.Submission) -> Optional[str]:
     return html_of(grading.tutor_line)
 
 
+_BLANK_TO_THE_EYE = "".join(
+    ("​", "‌", "‍", "⁠", "﻿")
+)
+"""Characters that occupy a gap without filling it.
+
+Whitespace is handled by `str.split`; these are not whitespace to Python but
+render as nothing, so a gap holding only these looks empty while defeating any
+test for emptiness.
+"""
+
+
+def verbatim_html(text: str) -> str:
+    """One string shown exactly as it was typed.
+
+    The **third** way a string becomes HTML in this package, and the narrowest:
+    `html_of` and `label_html` render restricted Markdown authored to be
+    rendered, and this one renders nothing at all. It exists for the learner's
+    own free text, which is the one string reaching a browser that nobody wrote
+    as markup — so `- entropy` is an answer beginning with a hyphen, not a
+    bulleted list, and `<script>` is four words about a tag (#131 review).
+
+    Whitespace is collapsed because the destination is an inline gap in a
+    sentence, where a newline the learner typed would otherwise open a second
+    line mid-clause.
+    """
+    return html.escape(" ".join(text.split()), quote=False)
+
+
+def _resolved_html(
+    resolved: "session_module.ResolvedAnswer | None",
+) -> str | None:
+    """What goes in the gap, rendered — or `None` when there is nothing to put
+    there.
+
+    Which renderer depends on **who wrote it**. Authored content — an option
+    label, a model-authored reveal — is restricted Markdown and goes through
+    `label_html` rather than `html_of`, for the reason `label_html` exists: the
+    fragment lands inline in the middle of a sentence, and the block render's
+    `<p>` would carry paragraph margins in with it (#98). The learner's own
+    words go through `verbatim_html`, because they are not markup and were
+    never meant to be read as any.
+
+    This is the field that replaced the client scanning the rendered document
+    for an option id
+    ([ADR-0019](../../../docs/adr/0019-resolved-blank-text-comes-from-the-service.md),
+    [#127](https://github.com/derkmed/socratic/issues/127)). A null here means
+    the gap stays empty; it never means "fall back to what the learner typed",
+    which is the defect that made an Advanced blank close showing the wrong
+    answer.
+    """
+    if resolved is None:
+        return None
+    if not resolved.text.strip(_BLANK_TO_THE_EYE + string.whitespace):
+        # A gap that renders as nothing is not a filled gap, and letting one
+        # through would silently defeat whatever marks an unanswered blank.
+        return None
+    if resolved.learner_authored:
+        return verbatim_html(resolved.text)
+    return label_html(resolved.text)
+
+
 def submission_body(
     submission: session_module.Submission, *, capability_token: str
 ) -> dict[str, Any]:
@@ -250,6 +313,7 @@ def submission_body(
         ),
         "tutor_line_html": _tutor_line_html(submission),
         "revealed_option_id": submission.revealed_option_id,
+        "resolved_html": _resolved_html(submission.resolved_answer),
         "blank_resolved": submission.blank_resolved,
         "attempt_sealed": submission.attempt_sealed,
         "probe": _probe_body(submission.probe_asked),

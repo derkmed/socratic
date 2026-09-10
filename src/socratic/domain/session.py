@@ -113,6 +113,7 @@ _VERDICT = "verdict"
 _TUTOR_LINE = "tutor_line"
 _PROBE_QUESTION = "probe_question"
 _HINT = "hint"
+_REVEALED_ANSWER = "revealed_answer"
 _CORRECTION = "correction"
 
 MAX_REOPENS_PER_BLANK = 1
@@ -182,6 +183,28 @@ class ModelGrading:
     tutor_line: str | None
     probe_question: str | None
     hint: str | None
+    revealed_answer: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedAnswer:
+    """What fills the gap when a blank closes, and who wrote it.
+
+    The provenance is not decoration, and this is one field rather than two
+    because two nullable fields are a pair a caller can get out of step — which
+    is the shape of defect [#127](https://github.com/derkmed/socratic/issues/127)
+    already was.
+
+    An option label and a model-authored `revealed_answer` are **restricted
+    Markdown**, written to be rendered. The learner's own free text is not:
+    they typed an answer, not markup. Rendering it as Markdown puts a bulleted
+    list in the middle of a sentence the moment someone answers with a leading
+    "- ", which is why the client used `textContent` for this one string before
+    ADR-0019 moved the rendering to the service.
+    """
+
+    text: str
+    learner_authored: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +213,10 @@ class Submission:
 
     `revealed_option_id` is non-null only on the rung-three reveal of a blank
     that *has* an option id, which is the single route by which the answer key
-    reaches a caller.
+    reaches a caller. It is the **disclosure marker** and nothing else: no
+    displayable text is derived from it any more (ADR-0019). What goes in the
+    gap is `resolved_answer`, in words, and it is null whenever the blank did
+    not resolve or nothing safe was available - never the learner's guess.
 
     `model_grading` is non-null only on the model-graded path. There is
     deliberately no `tutor_line` attribute here (D13).
@@ -211,6 +237,7 @@ class Submission:
     attempt_sealed: bool
     model_grading: ModelGrading | None = None
     probe_asked: records.Probe | None = None
+    resolved_answer: ResolvedAnswer | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +252,17 @@ class ProbeAnswer:
     `revealed_option_id` is non-null only on that second case — the "reveals
     and moves on" of ADR-0009, mirroring rung three — and only for a blank that
     has an option id at all. An Advanced blank has none, and its rubric is not
-    one (D4).
+    one (D4). In practice that is *never*: re-opening is `REOPEN_BLANK`, which
+    only the Advanced policy carries, and an Advanced blank is validated to
+    carry no `correct_option_id`. The field is kept because the branch is
+    written in terms of the policy rather than the mode, and a future policy
+    could pair `REOPEN_BLANK` with an option bank.
+
+    There is deliberately **no** `resolved_answer` here. This path can close a
+    blank, but it cannot change what belongs in the gap: a probe only fires
+    after a correct answer, so the gap already holds it. Carrying one anyway
+    gave the client something to paint with when it had nothing, which erased
+    the answer (#131 review).
     """
 
     verdict: Verdict
@@ -270,6 +307,10 @@ class _Grade:
     model_grading: ModelGrading | None = None
     model_call: records.ModelCallRecord | None = None
     probe_question: str | None = None
+    resolved_answer: ResolvedAnswer | None = None
+    """What goes in the gap, or `None` if the blank did not
+    resolve or nothing safe was available to fill it (ADR-0019). Never the
+    learner's guess on a wrong answer - that was #127."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +389,75 @@ def _safe_hint(blank: Blank, hint: str | None) -> str | None:
     return hint
 
 
+def _resolved_option(blank: Blank, option_id: str | None) -> "ResolvedAnswer | None":
+    """The words behind an option id, or `None` if nothing carries it.
+
+    Option ids are **blank-scoped** (CONTEXT: Option id), so this takes the
+    blank that scopes the id rather than searching the quiz. That is the whole
+    of [#127](https://github.com/derkmed/socratic/issues/127): the client used
+    to do this lookup against the rendered document, where the first match in
+    order is usually some other blank's option.
+    """
+    if option_id is None:
+        return None
+    for option in blank.options or ():
+        if option.option_id == option_id:
+            return ResolvedAnswer(option.text)
+    return None
+
+
+REVEAL_MAX_CHARS = 120
+"""How long a short-form reveal may be before it stops being one.
+
+A gap is a noun-phrase-shaped hole (ADR-0019). This is the width of the widest
+phrase that still reads as one, and it is a **custody** bound as much as a
+cosmetic one — grading criteria are prose, and prose does not fit here.
+"""
+
+
+def _safe_revealed_answer(blank: Blank, revealed: str | None) -> str | None:
+    """A model-authored short-form reveal, or `None` if it leaks the key.
+
+    **Deliberately not `_safe_hint`, and not a caller of it.**
+    [ADR-0019](../../../docs/adr/0019-resolved-blank-text-comes-from-the-service.md).
+    The two fields have opposite relationships to the answer key: a hint must
+    approach it without arriving, so any hint carrying the rubric is dropped;
+    this field's entire job is to *name* the answer, and `_safe_hint`'s rule
+    would fire on exactly the use it was added for. A rubric short enough to be
+    quoted inside a legitimate hint is a documented false positive there; here
+    it would be the common case.
+
+    So the threshold moves rather than the posture. Two bounds, both
+    fail-closed:
+
+    1. **Length.** Anything longer than `REVEAL_MAX_CHARS` is not a phrase, and
+       a reveal that is not a phrase is not what was asked for. This is what
+       stops a paragraph of grading criteria whatever words it uses, and it is
+       the bound that does the structural work.
+    2. **Verbatim rubric.** Under that cap a short rubric can still be copied
+       out whole, so the `_safe_hint` containment check is repeated here for
+       the case the cap cannot see. Whitespace is normalised first, for the
+       same reason and with the same case-sensitivity: the point is to catch a
+       copy, and a paraphrase is what was asked for.
+
+    The false positive that remains is a rubric that *is* the bare answer, which
+    would drop a correct reveal of it. That is the cheap direction of the trade
+    (ADR-0003): a dropped reveal costs a gap, a published rubric costs the
+    exercise. It closes the blank with nothing in it, which is
+    [#130](https://github.com/derkmed/socratic/issues/130) and not this.
+    """
+    if revealed is None or not blank.rubric:
+        return revealed
+    normalised = " ".join(revealed.split())
+    if not normalised:
+        return None
+    if len(normalised) > REVEAL_MAX_CHARS:
+        return None
+    if " ".join(blank.rubric.split()) in normalised:
+        return None
+    return normalised
+
+
 def _ladder_rung(prior_wrong: int) -> int:
     """Which rung a wrong answer lands on: the next one, capped at three.
 
@@ -390,14 +500,17 @@ def _grade_against_the_key(context: _GradingContext) -> _Grade:
             feedback=blank.reinforcement,
             revealed_option_id=None,
             probe_question=blank.probe_question,
+            resolved_answer=_resolved_option(blank, key),
         )
 
     rung = _ladder_rung(context.prior_wrong)
+    revealed = key if rung >= HINT_LADDER_RUNGS else None
     return _Grade(
         verdict=Verdict.INCORRECT,
         hint_rung_shown=rung,
         feedback=_hint_for_rung(blank, rung),
-        revealed_option_id=key if rung >= HINT_LADDER_RUNGS else None,
+        revealed_option_id=revealed,
+        resolved_answer=_resolved_option(blank, revealed),
     )
 
 
@@ -449,7 +562,11 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
     response = context.model_client.grade_answer(segments)
     verdict, grading = _parse_grading(response.content)
     grading = dataclasses.replace(
-        grading, hint=_safe_hint(context.blank, grading.hint)
+        grading,
+        hint=_safe_hint(context.blank, grading.hint),
+        revealed_answer=_safe_revealed_answer(
+            context.blank, grading.revealed_answer
+        ),
     )
 
     call = records.ModelCallRecord(
@@ -467,6 +584,9 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
             model_grading=grading,
             model_call=call,
             probe_question=grading.probe_question,
+            resolved_answer=ResolvedAnswer(
+                context.submitted, learner_authored=True
+            ),
         )
 
     return _Grade(
@@ -476,6 +596,11 @@ def _grade_by_model(context: _GradingContext) -> _Grade:
         revealed_option_id=None,
         model_grading=grading,
         model_call=call,
+        resolved_answer=(
+            ResolvedAnswer(grading.revealed_answer)
+            if rung >= HINT_LADDER_RUNGS and grading.revealed_answer
+            else None
+        ),
     )
 
 
@@ -505,13 +630,13 @@ def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
     reads its own response, and the reason a probe question landing here costs
     no change to the five-method `ModelClient`.
 
-    All three riders are optional *and* nullable: segment 1 tells the model to
+    All four riders are optional *and* nullable: segment 1 tells the model to
     omit an optional field rather than fill it with filler, so an absent key and
     an explicit null mean the same thing.
 
     Raises:
       GradingParseError: On anything that is not an object carrying a known
-        verdict and, at most, three string-or-null riders.
+        verdict and, at most, four string-or-null riders.
     """
     try:
         payload = json.loads(content)
@@ -541,6 +666,7 @@ def _parse_grading(content: str) -> "tuple[Verdict, ModelGrading]":
         tutor_line=_optional_line(payload, _TUTOR_LINE),
         probe_question=_optional_line(payload, _PROBE_QUESTION),
         hint=_optional_line(payload, _HINT),
+        revealed_answer=_optional_line(payload, _REVEALED_ANSWER),
     )
 
 
@@ -848,6 +974,7 @@ class QuizSession:
             attempt_sealed=sealed,
             model_grading=grade.model_grading,
             probe_asked=probe,
+            resolved_answer=grade.resolved_answer,
         )
 
     # --- Probes ---------------------------------------------------------------

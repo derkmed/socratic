@@ -46,6 +46,13 @@ response it was already sending.
 **Blank** — one masked element. Carries mode-specific fields: Novice has `options`,
 `correct_option_id`, `reinforcement` and three `hints`; Advanced has a `rubric`.
 
+**Option id** — a Novice option's identifier, unique **within its blank and
+nowhere else**. The validator asks only that `correct_option_id` names one of
+*that blank's* options, and authored quizzes reuse `a`/`b`/`c` across every
+blank. So an option id is meaningful only alongside the `blank_id` that scopes
+it, and any lookup keyed on one alone is a bug — which is what
+[#127](https://github.com/derkmed/socratic/issues/127) was.
+
 **Answer key** — the correct answers and pre-authored feedback. Lives in the store,
 inside the backend process. Never serialized into the iframe.
 

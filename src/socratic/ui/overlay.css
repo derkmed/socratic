@@ -86,6 +86,23 @@ body {
   min-width: 0;
 }
 
+/* A blank can close with nothing to put in it (#130): rung three closes it
+ * whether or not the model sent a short-form reveal, and the custody guard may
+ * drop the one it did send. ADR-0019 chose an empty gap over the learner's
+ * wrong guess; this stops that gap being a *silent* one, which master
+ * acceptance 31 forbids.
+ *
+ * The words themselves are written by the client, as real text in the
+ * document, the way every other verdict literal is. They are deliberately not
+ * `content:` here: generated content is not in the DOM, so it cannot be
+ * selected, copied or translated, and it reaches assistive tech unevenly. */
+.socratic-blank[data-state="unanswered"] {
+  border-bottom-color: var(--rule);
+  color: var(--muted);
+  font-style: italic;
+  min-width: 0;
+}
+
 .socratic-control,
 .socratic-probe,
 .socratic-rating,

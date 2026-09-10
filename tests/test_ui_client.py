@@ -140,6 +140,7 @@ def graded(**overrides) -> str:
         "feedback_html": "<p>Entropy is the one that never decreases.</p>",
         "tutor_line_html": None,
         "revealed_option_id": None,
+        "resolved_html": "entropy",
         "blank_resolved": True,
         "attempt_sealed": False,
         "probe": None,
@@ -391,21 +392,40 @@ class TestTheVerdict:
 
     def test_a_resolved_blank_is_told_what_to_put_in_the_gap(self):
         """Master acceptance 31 is "no silent blanks", and a finished quiz whose
-        every blank is an empty gap is exactly that. What the learner got right
-        is what fills it — the service sends no resolved text on a correct
-        answer, and a client that waited for one would leave a hole."""
+        every blank is an empty gap is exactly that. The service states what
+        fills it (ADR-0019); the client no longer reconstructs it."""
         emitted = run_js(
             """
             const client = clientWith([%s]);
             await client.submitAnswer('b1', 'o1');
             emit({});
             """
-            % graded()
+            % graded(resolved_html="<code>OrderedDict</code>")
         )
 
-        assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
+        gap = only(emitted, "resolveBlank")["args"][0]
+        assert gap["resolvedHtml"] == "<code>OrderedDict</code>"
 
-    def test_a_rung_three_reveal_fills_the_gap_with_the_revealed_option(self):
+    def test_the_gap_is_never_filled_from_what_the_learner_submitted(self):
+        """[#127](https://github.com/derkmed/socratic/issues/127). The client
+        used to pass the submitted option id and let the view hunt the document
+        for a matching button — which, option ids being blank-scoped, usually
+        found a different blank's option."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o1');
+            emit({});
+            """
+            % graded(resolved_html="entropy")
+        )
+
+        gap = only(emitted, "resolveBlank")["args"][0]
+        assert "o1" not in json.dumps(gap), (
+            "the submitted id reached the view; the gap can desync again"
+        )
+
+    def test_a_rung_three_reveal_fills_the_gap_from_the_wire(self):
         """Not with what the learner typed — they got it wrong, and the reveal
         is the one sanctioned disclosure of the key (ADR-0009)."""
         emitted = run_js(
@@ -418,11 +438,54 @@ class TestTheVerdict:
                 verdict="incorrect",
                 hint_rung_shown=3,
                 revealed_option_id="o1",
+                resolved_html="entropy",
                 blank_resolved=True,
             )
         )
 
-        assert only(emitted, "resolveBlank")["args"][0]["answer"] == "o1"
+        gap = only(emitted, "resolveBlank")["args"][0]
+        assert gap["resolvedHtml"] == "entropy"
+
+    def test_an_advanced_rung_three_close_never_shows_the_wrong_answer(self):
+        """The second defect of #127, at the seam that shipped it. An Advanced
+        blank has no option id, so the reveal is prose and `revealed_option_id`
+        is null — and the client used to fall back to `submitted`, planting the
+        learner's third wrong guess in the finished explanation. With no
+        `resolved_html` the gap stays empty instead."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'collections.OrderedDict');
+            emit({});
+            """
+            % graded(
+                verdict="incorrect",
+                graded_by="model_graded",
+                hint_rung_shown=3,
+                revealed_option_id=None,
+                resolved_html=None,
+                blank_resolved=True,
+            )
+        )
+
+        gap = only(emitted, "resolveBlank")["args"][0]
+        assert gap["resolvedHtml"] is None
+        assert "collections.OrderedDict" not in json.dumps(gap)
+
+    def test_free_text_the_learner_got_right_is_their_own_words(self):
+        """An Advanced learner who happens to type `a` or `o1` must not have it
+        read as an option id — the collision the document-wide lookup made
+        possible. The service sends their words back, sanitised."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.submitAnswer('b1', 'o1');
+            emit({});
+            """
+            % graded(graded_by="model_graded", resolved_html="o1")
+        )
+
+        assert only(emitted, "resolveBlank")["args"][0]["resolvedHtml"] == "o1"
 
 
 class TestTheLatePedagogyWindow:
@@ -713,6 +776,72 @@ class TestTheProbe:
         graded_call = only(emitted, "probeGraded")["args"][0]
         assert graded_call["blankReopened"] is True
         assert "Heat is not disorder." in graded_call["correctionHtml"]
+
+    def test_answering_a_probe_never_repaints_the_gap(self):
+        """The regression #131's review caught, at the seam that shipped it.
+
+        A probe only fires after a *correct* answer, so by the time one is
+        answered the gap already holds that answer — `submit` put it there. The
+        probe path has nothing to say about the gap, and a `resolveBlank` call
+        that fires anyway arrives with nothing to write and erases what was
+        there. On the common Novice flow that turned a correctly answered blank
+        into an empty one, and with #130's affordance into one captioned "not
+        answered"."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s, %s]);
+            await client.submitAnswer('b1', 'o1');
+            await client.answerProbe('b1', 'I recalled the second law.');
+            emit({});
+            """
+            % (
+                graded(probe=PROBE, resolved_html="entropy"),
+                json.dumps(
+                    {
+                        "verdict": "correct",
+                        "correction_html": None,
+                        "blank_reopened": False,
+                        "blank_resolved": True,
+                        "revealed_option_id": None,
+                        "attempt_sealed": True,
+                        "capability_token": ROTATED,
+                    }
+                ),
+            )
+        )
+
+        gaps = [
+            call["args"][0]
+            for call in emitted["calls"]
+            if call["name"] == "resolveBlank"
+        ]
+        assert gaps == [{"blankId": "b1", "resolvedHtml": "entropy"}], (
+            "the probe path repainted a gap the submission had already filled"
+        )
+
+    def test_a_probe_that_reopens_the_blank_fills_no_gap(self):
+        """The blank is going back to the learner; filling it would answer the
+        question it is about to ask again."""
+        emitted = run_js(
+            """
+            const client = clientWith([%s]);
+            await client.answerProbe('b1', 'I guessed');
+            emit({});
+            """
+            % json.dumps(
+                {
+                    "verdict": "incorrect",
+                    "correction_html": "<p>Heat is not disorder.</p>",
+                    "blank_reopened": True,
+                    "blank_resolved": False,
+                    "revealed_option_id": None,
+                    "attempt_sealed": False,
+                    "capability_token": ROTATED,
+                }
+            )
+        )
+
+        assert "resolveBlank" not in call_names(emitted)
 
     def test_dismissing_a_probe_sends_a_null_self_explanation(self):
         """A dismissal is a value on the same endpoint, not a fifth route
