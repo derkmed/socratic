@@ -42,17 +42,47 @@ here to import the Pipe.
 
 ### 1. Get the code and set two secrets and a key
 
+Write them into a `.env` file beside `compose.yaml`. Compose reads it
+automatically, it is already gitignored, and — unlike a shell export — it is
+still there tomorrow:
+
 ```sh
 git clone https://github.com/derkmed/socratic.git
 cd socratic
 
-export SOCRATIC_TOKEN_SECRET=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
-export SOCRATIC_SERVICE_TOKEN=$(python -c "import secrets;print(secrets.token_urlsafe(32))")
-export ANTHROPIC_API_KEY=sk-ant-...
+cat >> .env <<'EOF'
+SOCRATIC_TOKEN_SECRET=replace-me
+SOCRATIC_SERVICE_TOKEN=replace-me
+ANTHROPIC_API_KEY=sk-ant-...
+EOF
 ```
 
+To generate the two secrets, run this **once** and paste the output into the
+file above:
+
+```sh
+python -c "import secrets;print(secrets.token_urlsafe(32));print(secrets.token_urlsafe(32))"
+```
+
+> **Generate them once, not once per session.** Both secrets are values that two
+> parties have to agree on, so minting fresh ones on an install that already
+> works is what breaks it — and neither failure names its cause:
+>
+> - A new `SOCRATIC_SERVICE_TOKEN` no longer matches the one saved in the Pipe's
+>   valves, and authoring fails with **HTTP 401**. Open WebUI stores a valve once
+>   it is saved, and a stored valve outranks the environment from then on, so
+>   fixing the container's variable alone does not fix this — see step 3.
+> - A new `SOCRATIC_TOKEN_SECRET` invalidates every capability token already
+>   minted, so quizzes *author* fine and then reject every **answer**.
+>
+> If you export either variable in your shell, that export **overrides `.env`**
+> for as long as the shell lives. That is the usual way an install that worked
+> yesterday returns a 401 today. `unset SOCRATIC_SERVICE_TOKEN` before
+> `docker compose up` to put `.env` back in charge.
+
 Neither secret has a default: a missing one fails at startup rather than
-silently weakening. On Windows PowerShell, use `$env:NAME = "value"`.
+silently weakening. On Windows PowerShell, use `$env:NAME = "value"` if you
+export rather than using `.env`.
 
 Three values, and they are not interchangeable:
 
@@ -61,9 +91,6 @@ Three values, and they are not interchangeable:
 | `ANTHROPIC_API_KEY` | quiz service only | Authoring a quiz. The Pipe never calls a model. |
 | `SOCRATIC_SERVICE_TOKEN` | the Pipe **and** the service | The Pipe's credential for calling the service. The two must match. |
 | `SOCRATIC_TOKEN_SECRET` | quiz service only | Signs the short-lived **capability token** the overlay carries. Never leaves the service's process. |
-
-Rather than exporting each time, write them into a `.env` file beside
-`compose.yaml` — compose reads it automatically, and it is already gitignored.
 
 ### 2. Start both containers
 
@@ -95,7 +122,7 @@ which does not have this package.
    non-admin account is redirected away rather than shown an empty list.
 2. Paste the whole of `pipe/socratic_pipe.py`, save, and enable it.
 3. Check its **Valves**. They default from the environment `compose.yaml`
-   already sets, so on a default `docker compose up` there is nothing to
+   already sets, so on a *first* `docker compose up` there is nothing to
    change:
 
    | Valve | Default | What it is |
@@ -104,6 +131,12 @@ which does not have this package.
    | `service_token` | `$SOCRATIC_SERVICE_TOKEN` | The Pipe's credential. Must match the service's. Not a learner's capability token. |
    | `mode` | `novice` | The difficulty mode to author in, install-wide. |
    | `timeout_seconds` | `120` | Authoring makes a model call. |
+
+   Those are **defaults, not bindings**. Open WebUI stores a valve the moment
+   the Function is saved, and from then on the stored value wins and the
+   environment is ignored. So if you change `SOCRATIC_SERVICE_TOKEN` later,
+   recreating the containers updates the *service* and leaves the *Pipe* still
+   presenting the old one — the 401 in the table below. Change it here too.
 
 ### 4. Ask a question
 
@@ -120,7 +153,8 @@ smoke test the automated suite cannot perform (see [Tests](#tests)).
 | `docker compose up` exits complaining about a variable | One of the three values in step 1 is unset in this shell. Export it or put it in `.env`. |
 | No **socratic** model in the chat picker | The Function was saved but not *enabled*, or you are signed in as a non-admin who cannot see `/admin/functions`. |
 | The overlay renders but answering does nothing | The browser cannot reach the service. Open <http://localhost:8080> directly; if that works but answering does not, `SOCRATIC_PUBLIC_URL` is wrong for where the *browser* is. |
-| `401` from the service | The Pipe's `service_token` Valve and the service's `SOCRATIC_SERVICE_TOKEN` differ. |
+| `401` when **authoring** | The Pipe's `service_token` Valve and the service's `SOCRATIC_SERVICE_TOKEN` differ. Usually because the secret was regenerated, or a shell `export` is shadowing `.env`. Recreating the container is not enough: the Pipe's valve is *stored*, so update it in step 3 as well. Compare without printing either: `docker compose exec quiz-service sh -c 'printf %s "$SOCRATIC_SERVICE_TOKEN" \| sha256sum \| cut -c1-12'`. |
+| Quizzes author, then every **answer** is refused | `SOCRATIC_TOKEN_SECRET` changed. It signs capability tokens, so a new value invalidates every overlay already on screen. Ask a fresh question. |
 | A changed key or secret has no effect | Compose fixed the environment when the container was **created** — recreate rather than restart, below. |
 | Nothing renders and the console shows a blocked `fetch` | `IFRAME_CSP` is set on your Open WebUI. That is out of scope, structurally — see [the constraint](#constraint-a-default-open-webui-install-only). |
 
